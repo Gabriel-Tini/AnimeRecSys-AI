@@ -179,7 +179,17 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({
                 )}
                 {anime.status && (
                   <span className="text-[11px] font-medium px-2 py-0.5 rounded bg-white/5 border border-white/10 text-slate-300">
-                    {anime.status === 'FINISHED' ? 'Finalizado' : anime.status === 'RELEASING' ? 'Em exibição' : anime.status}
+                    {anime.status === 'FINISHED'
+                      ? 'Finalizado'
+                      : anime.status === 'RELEASING'
+                      ? 'Em exibição'
+                      : anime.status === 'NOT_YET_RELEASED'
+                      ? 'Não Lançado'
+                      : anime.status === 'CANCELLED'
+                      ? 'Cancelado'
+                      : anime.status === 'HIATUS'
+                      ? 'Em Hiato'
+                      : anime.status}
                   </span>
                 )}
                 {matchPct !== null && (
@@ -427,7 +437,14 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({
             {/* Rating Selector */}
             {onRate && (
               <div className="p-3.5 rounded-xl bg-[#171b26] border border-white/5 flex flex-col gap-3">
-                {userRating != null ? (
+                {anime.status === 'NOT_YET_RELEASED' ? (
+                  <div className="flex items-center gap-2.5 text-xs text-amber-300">
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
+                    <span>
+                      Esta obra ainda não foi lançada. A avaliação estará disponível assim que a exibição começar.
+                    </span>
+                  </div>
+                ) : userRating != null ? (
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 w-full">
                     <div className="flex items-center gap-2.5">
                       <span className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shrink-0">

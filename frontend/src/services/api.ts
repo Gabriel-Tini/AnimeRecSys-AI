@@ -146,8 +146,64 @@ let fallbackProfile: UserProfileData = loadStoredProfile();
 let fallbackHistory: WatchHistoryEntry[] = loadStoredHistory();
 let isBackendOnlineCache: boolean | null = null;
 
+const SEQUEL_TITLE_REGEX =
+  /(\bseason\s*[2-9]\b|\b[2-9](?:nd|rd|th)\s*season\b|\bpart\s*[2-9]\b|\bcour\s*[2-9]\b|\bthe\s*final\s*season\b|\bfinal\s*season\b|\bsecond\s*season\b|\bthird\s*season\b|\bfourth\s*season\b|\bfifth\s*season\b|\bsixth\s*season\b|\b(?:ii|iii|iv|v|vi)\b|\b2nd\s*cour\b|\bzoku\b|\bclimax\b|\bshippuuden\b|\bshippuden\b|\bnext\s*generations\b)/i;
+
 /**
- * Loads the full 961-anime static catalog from /data/catalog.json when hosted on Firebase Hosting.
+ * Checks if an anime is a released non-MV series/work eligible to appear in the platform.
+ */
+export function isReleasedAnimeWork(anime: { format?: string | null; status?: string | null }): boolean {
+  const fmt = (anime.format || '').trim().toUpperCase();
+  const st = (anime.status || '').trim().toUpperCase();
+  if (fmt === 'MUSIC') return false;
+  if (st === 'NOT_YET_RELEASED' || st === 'CANCELLED') return false;
+  return true;
+}
+
+/**
+ * Checks if an anime is eligible for recommendation / onboarding without violating season order.
+ * Subsequent seasons (Season 2, Season 3, Part 2, Final Season, sequel movies) are only eligible
+ * if the user has already positively rated (rating >= 5.5, not dropped) their predecessor season.
+ */
+export function isAnimeEligibleForRecommendation(
+  anime: RawAnimeFixture | AnimePublic,
+  positivelyRatedIds: Set<number>,
+  allRatedOrInteractedIds?: Set<number>
+): boolean {
+  if (!isReleasedAnimeWork(anime)) return false;
+
+  const prequels = anime.prequel_ids ?? [];
+  if (prequels.length > 0) {
+    return prequels.some((pid) => positivelyRatedIds.has(pid));
+  }
+
+  const titleCombined = `${anime.title_romaji || ''} ${anime.title_english || ''}`;
+  if (anime.is_sequel || SEQUEL_TITLE_REGEX.test(titleCombined)) {
+    // Fallback title prefix match when prequel_ids isn't populated (e.g. live search item)
+    const basePrefix = (anime.title_romaji || '')
+      .split(/[:\-]|Season|2nd|3rd|4th|Part|II|III|Final/i)[0]
+      .trim()
+      .toLowerCase();
+    if (basePrefix.length >= 4) {
+      for (const item of activeCatalog) {
+        if (item.id !== anime.id && positivelyRatedIds.has(item.id)) {
+          if ((item.title_romaji || '').toLowerCase().startsWith(basePrefix)) {
+            return true;
+          }
+        }
+      }
+    }
+    if (allRatedOrInteractedIds && prequels.some((pid) => allRatedOrInteractedIds.has(pid))) {
+      return false;
+    }
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Loads the full static catalog from /data/catalog.json when hosted on Firebase Hosting.
  */
 async function ensureStaticCatalogLoaded(): Promise<RawAnimeFixture[]> {
   if (activeCatalog.length > SAMPLE_ANIMES_FULL.length) {
@@ -162,13 +218,14 @@ async function ensureStaticCatalogLoaded(): Promise<RawAnimeFixture[]> {
       if (res.ok && (res.headers.get('content-type') || '').includes('application/json')) {
         const data = (await res.json()) as RawAnimeFixture[];
         if (Array.isArray(data) && data.length > 0) {
-          activeCatalog = data;
+          activeCatalog = data.filter(isReleasedAnimeWork);
           return activeCatalog;
         }
       }
     } catch {
       // Fallback to seed fixtures if /data/catalog.json is unavailable
     }
+    activeCatalog = activeCatalog.filter(isReleasedAnimeWork);
     return activeCatalog;
   })();
   return catalogLoadPromise;
@@ -240,6 +297,8 @@ export function sanitizePublicAnime(raw: RawAnimeFixture | AnimePublic): AnimePu
     tags: safeTags,
     description: raw.description ?? null,
     has_spoiler_tags: detectedSpoilerTag,
+    prequel_ids: raw.prequel_ids ? [...raw.prequel_ids] : [],
+    is_sequel: Boolean(raw.is_sequel),
     compatibility_score: 'compatibility_score' in raw ? raw.compatibility_score : null,
     origin_track: 'origin_track' in raw ? raw.origin_track : null,
   };
@@ -311,7 +370,7 @@ function recalculateProfileWeightsFromHistory(
 
 /**
  * Computes recommendations with 80% Cosine Affinity / 20% MMR Discovery split,
- * history/skip/drop exclusion, and format/genre blocking filters over the full catalog.
+ * history/skip/drop exclusion, sequel gating, and format/genre blocking filters over the full catalog.
  */
 function computeFallbackRecommendations(
   profile: UserProfileData,
@@ -323,11 +382,19 @@ function computeFallbackRecommendations(
     ...(profile.skipped_anime_ids ?? []),
     ...(profile.dropped_anime_ids ?? []),
   ]);
+  const positivelyRatedIds = new Set<number>(
+    history
+      .filter((h) => (h.interaction_status ?? 'watched') === 'watched' && (h.rating ?? 0) >= 5.5)
+      .map((h) => h.anime_id)
+  );
   const blockedFormats = new Set((profile.excluded_formats ?? []).map((f) => f.trim().toUpperCase()));
   const blockedGenres = new Set((profile.blocked_genres ?? []).map((g) => g.trim().toLowerCase()));
 
   const candidates = activeCatalog.filter((a) => {
     if (excludedIds.has(a.id)) return false;
+    if (!isAnimeEligibleForRecommendation(a, positivelyRatedIds, excludedIds)) {
+      return false;
+    }
     if (blockedFormats.size > 0 && blockedFormats.has((a.format || 'TV').trim().toUpperCase())) {
       return false;
     }
@@ -469,15 +536,16 @@ export async function fetchCatalog(params?: {
     `${API_BASE_URL}/catalog?${searchParams.toString()}`
   );
   if (backendData && Array.isArray(backendData.items)) {
+    const validItems = backendData.items.filter(isReleasedAnimeWork).map(sanitizePublicAnime);
     return {
       ...backendData,
-      items: backendData.items.map(sanitizePublicAnime),
+      items: validItems,
     };
   }
 
   await ensureStaticCatalogLoaded();
 
-  let filtered = activeCatalog.map(sanitizePublicAnime);
+  let filtered = activeCatalog.filter(isReleasedAnimeWork).map(sanitizePublicAnime);
   if (q) {
     const token = q.toLowerCase();
     filtered = filtered.filter(
@@ -499,7 +567,7 @@ export async function fetchCatalog(params?: {
             query: `
               query ($search: String) {
                 Page(page: 1, perPage: 12) {
-                  media(search: $search, type: ANIME, isAdult: false, sort: POPULARITY_DESC) {
+                  media(search: $search, type: ANIME, isAdult: false, format_not_in: [MUSIC], status_in: [FINISHED, RELEASING], sort: POPULARITY_DESC) {
                     id
                     title { romaji english native }
                     coverImage { extraLarge large }
@@ -514,6 +582,12 @@ export async function fetchCatalog(params?: {
                     genres
                     description(asHtml: false)
                     tags { id name rank isMediaSpoiler }
+                    relations {
+                      edges {
+                        relationType(version: 2)
+                        node { id type format status seasonYear }
+                      }
+                    }
                   }
                 }
               }
@@ -527,6 +601,27 @@ export async function fetchCatalog(params?: {
           const existingIds = new Set(activeCatalog.map((a) => a.id));
           for (const m of mediaList) {
             if (!m?.id) continue;
+            const mFmt = String(m.format || 'TV').toUpperCase();
+            const mStatus = String(m.status || 'FINISHED').toUpperCase();
+            if (mFmt === 'MUSIC' || mStatus === 'NOT_YET_RELEASED' || mStatus === 'CANCELLED') {
+              continue;
+            }
+            const edges = m.relations?.edges || [];
+            const preqIds: number[] = [];
+            for (const edge of edges) {
+              const rType = edge?.relationType;
+              const node = edge?.node;
+              if (
+                node?.type === 'ANIME' &&
+                node?.id &&
+                String(node.format || '').toUpperCase() !== 'MUSIC' &&
+                rType === 'PREQUEL'
+              ) {
+                preqIds.push(Number(node.id));
+              }
+            }
+            const titleCombined = `${m.title?.romaji || ''} ${m.title?.english || ''}`;
+            const isSeq = preqIds.length > 0 || SEQUEL_TITLE_REGEX.test(titleCombined);
             const rawItem: RawAnimeFixture = {
               id: m.id,
               title_romaji: m.title?.romaji || m.title?.english || `Anime #${m.id}`,
@@ -543,6 +638,8 @@ export async function fetchCatalog(params?: {
               popularity: m.popularity || 1000,
               genres: m.genres || [],
               description: m.description || undefined,
+              prequel_ids: preqIds,
+              is_sequel: isSeq,
               tags: (m.tags || []).map((t: { id?: number; name: string; rank?: number; isMediaSpoiler?: boolean }) => ({
                 id: t.id || 0,
                 name: t.name,
@@ -1784,7 +1881,10 @@ export interface SeasonalResponse {
 export async function fetchSeasonalReleases(): Promise<SeasonalResponse> {
   const data = await fetchBackendJson<SeasonalResponse>(`${API_BASE_URL}/season/releases`);
   if (data && Array.isArray(data.items) && data.items.length > 0) {
-    return data;
+    return {
+      ...data,
+      items: data.items.filter(isReleasedAnimeWork),
+    };
   }
 
   if (seasonalCache) {
@@ -1796,8 +1896,11 @@ export async function fetchSeasonalReleases(): Promise<SeasonalResponse> {
     if (res.ok && (res.headers.get('content-type') || '').includes('application/json')) {
       const staticSeasonal = (await res.json()) as SeasonalResponse;
       if (staticSeasonal && Array.isArray(staticSeasonal.items)) {
-        seasonalCache = staticSeasonal;
-        return staticSeasonal;
+        seasonalCache = {
+          ...staticSeasonal,
+          items: staticSeasonal.items.filter(isReleasedAnimeWork),
+        };
+        return seasonalCache;
       }
     }
   } catch {

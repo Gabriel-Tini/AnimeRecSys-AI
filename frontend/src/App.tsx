@@ -47,6 +47,8 @@ import {
   fetchWatchHistory,
   googleLogout,
   googleSignIn,
+  isAnimeEligibleForRecommendation,
+  isReleasedAnimeWork,
   resetUserProfile,
   skipAnime,
   submitRating,
@@ -756,12 +758,23 @@ export const App: React.FC = () => {
     showToast('Preferências e histórico resetados para o estado inicial.');
   };
 
-  // Visible Onboarding Catalog (excludes evaluated, skipped, dropped, blocked formats & blocked genres)
+  const positivelyRatedIds = useMemo(
+    () =>
+      new Set<number>(
+        Object.entries(ratedMap)
+          .filter(([, score]) => Number(score) >= 5.5)
+          .map(([id]) => Number(id))
+      ),
+    [ratedMap]
+  );
+
+  // Visible Onboarding Catalog (excludes evaluated, skipped, dropped, unrated sequels, unreleased, MVs, blocked formats & blocked genres)
   const visibleOnboardingCatalog = useMemo(
     () =>
       catalog.filter((a) => {
         if (ratedMap[a.id] !== undefined) return false;
         if (skippedIds.has(a.id) || droppedIds.has(a.id)) return false;
+        if (!isAnimeEligibleForRecommendation(a, positivelyRatedIds)) return false;
         if (
           excludedFormatsSet.size > 0 &&
           excludedFormatsSet.has((a.format || 'TV').trim().toUpperCase())
@@ -776,12 +789,12 @@ export const App: React.FC = () => {
         }
         return true;
       }),
-    [catalog, ratedMap, skippedIds, droppedIds, excludedFormatsSet, blockedGenresSet]
+    [catalog, ratedMap, skippedIds, droppedIds, positivelyRatedIds, excludedFormatsSet, blockedGenresSet]
   );
 
   // Filtered & Sorted Catalog for Explorar Tab
   const exploreAnimes = useMemo(() => {
-    let list = [...fullCatalog];
+    let list = fullCatalog.filter(isReleasedAnimeWork);
     if (exploreQuery.trim()) {
       const q = exploreQuery.trim().toLowerCase();
       list = list.filter(
@@ -791,6 +804,9 @@ export const App: React.FC = () => {
           a.genres.some((g) => g.toLowerCase().includes(q)) ||
           a.tags.some((t) => t.toLowerCase().includes(q))
       );
+    } else {
+      // When browsing without a specific search query, hide subsequent seasons whose previous season hasn't been evaluated yet
+      list = list.filter((a) => isAnimeEligibleForRecommendation(a, positivelyRatedIds));
     }
     if (exploreGenre !== 'ALL') {
       list = list.filter((a) =>
@@ -833,6 +849,7 @@ export const App: React.FC = () => {
     ratedMap,
     skippedIds,
     droppedIds,
+    positivelyRatedIds,
     excludedFormatsSet,
     blockedGenresSet,
   ]);

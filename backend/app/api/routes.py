@@ -452,7 +452,11 @@ def get_catalog(
     Enforces strict R3 spoiler shielding on all returned AnimePublicResponse DTOs.
     """
     catalog = storage.load_catalog()
-    filtered = catalog
+    filtered = [
+        a for a in catalog
+        if (a.format or "").strip().upper() != "MUSIC"
+        and (a.status or "").strip().upper() not in ("NOT_YET_RELEASED", "CANCELLED")
+    ]
 
     # 1. Search Query Filter (q)
     if q and q.strip():
@@ -475,6 +479,10 @@ def get_catalog(
                 online_found = anilist_svc.search_anime_online(q.strip(), limit=8)
                 existing_ids = {a.id for a in title_matches + desc_matches}
                 for item in online_found:
+                    item_fmt = (item.format or "").strip().upper()
+                    item_st = (item.status or "").strip().upper()
+                    if item_fmt == "MUSIC" or item_st in ("NOT_YET_RELEASED", "CANCELLED"):
+                        continue
                     if item.id not in existing_ids:
                         title_matches.append(item)
                         existing_ids.add(item.id)

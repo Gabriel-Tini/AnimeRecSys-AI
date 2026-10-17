@@ -28,6 +28,8 @@ export interface AnimePublic {
   tags: string[]; // Strictly non-spoiler public tags
   description?: string | null;
   has_spoiler_tags?: boolean;
+  prequel_ids?: number[];
+  is_sequel?: boolean;
   compatibility_score?: number | null;
   origin_track?: 'affinity' | 'discovery' | null;
   reason?: string | null;

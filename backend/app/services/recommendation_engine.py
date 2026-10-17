@@ -9,9 +9,34 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from typing import Any, Dict, List, Literal, Optional, Sequence, Set, Tuple, Union
 
 import numpy as np
+
+SEQUEL_TITLE_REGEX = re.compile(
+    r"("
+    r"\bseason\s*[2-9]\b|"
+    r"\b[2-9](?:nd|rd|th)\s*season\b|"
+    r"\bpart\s*[2-9]\b|"
+    r"\bcour\s*[2-9]\b|"
+    r"\bthe\s*final\s*season\b|"
+    r"\bfinal\s*season\b|"
+    r"\bsecond\s*season\b|"
+    r"\bthird\s*season\b|"
+    r"\bfourth\s*season\b|"
+    r"\bfifth\s*season\b|"
+    r"\bsixth\s*season\b|"
+    r"\b(?:ii|iii|iv|v|vi)\b|"
+    r"\b2nd\s*cour\b|"
+    r"\bzoku\b|"
+    r"\bclimax\b|"
+    r"\bshippuuden\b|"
+    r"\bshippuden\b|"
+    r"\bnext\s*generations\b"
+    r")",
+    re.IGNORECASE,
+)
 
 try:
     from app.core.storage_manager import StorageManager
@@ -334,6 +359,42 @@ class RecommendationEngine:
             eligible_candidates = [
                 a for a in eligible_candidates if a.id not in excluded_profile_ids
             ]
+
+        # 1a. Exclude Music Videos (format == 'MUSIC') and Unreleased Animes (status == 'NOT_YET_RELEASED' or 'CANCELLED')
+        eligible_candidates = [
+            a
+            for a in eligible_candidates
+            if (a.format or "TV").strip().upper() != "MUSIC"
+            and (a.status or "FINISHED").strip().upper() not in ("NOT_YET_RELEASED", "CANCELLED")
+        ]
+
+        # 1a-bis. Sequel Gating: Never recommend a later season/sequel unless its predecessor has been positively rated
+        positively_rated_ids: Set[int] = set()
+        if history and not isinstance(history, set):
+            for h in history:
+                if hasattr(h, "anime_id") and hasattr(h, "rating"):
+                    st = getattr(h, "interaction_status", "watched")
+                    if st != "dropped" and float(h.rating) >= 5.5:
+                        positively_rated_ids.add(int(h.anime_id))
+                elif isinstance(h, dict) and "anime_id" in h:
+                    if h.get("interaction_status") != "dropped" and float(h.get("rating", 7.0)) >= 5.5:
+                        positively_rated_ids.add(int(h["anime_id"]))
+        elif isinstance(history, set):
+            positively_rated_ids = set(history)
+
+        def _is_eligible_season(anime: AnimeEntity) -> bool:
+            preq_ids = getattr(anime, "prequel_ids", None) or []
+            if preq_ids:
+                # Must have evaluated at least one direct prequel/parent positively
+                return any(pid in positively_rated_ids for pid in preq_ids)
+            if getattr(anime, "is_sequel", False):
+                return False
+            title_combined = f"{anime.title_romaji or ''} {anime.title_english or ''}"
+            if SEQUEL_TITLE_REGEX.search(title_combined):
+                return False
+            return True
+
+        eligible_candidates = [a for a in eligible_candidates if _is_eligible_season(a)]
 
         # 1b. Format Filtering (e.g. block MOVIE, OVA, ONA, SPECIAL when user wants only TV/Series)
         raw_excluded_formats = (

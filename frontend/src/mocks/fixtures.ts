@@ -31,6 +31,8 @@ export interface RawAnimeFixture {
   tags: AnimeTag[];
   description?: string;
   has_spoiler_tags?: boolean;
+  prequel_ids?: number[];
+  is_sequel?: boolean;
 }
 
 export const TAGS_VOCABULARY: AnimeTag[] = [

@@ -204,6 +204,8 @@ class AnimeEntity(BaseModel):
         description="Full list of tags including spoiler tags for internal vector modeling"
     )
     description: Optional[str] = Field(default=None, description="Synopsis or plot overview")
+    prequel_ids: List[int] = Field(default_factory=list, description="List of AniList prequel/parent anime IDs")
+    is_sequel: bool = Field(default=False, description="Whether this anime is a sequel or later season")
 
     @field_validator("cover_image", mode="before")
     @classmethod
@@ -294,6 +296,8 @@ class AnimePublicResponse(BaseModel):
     )
     description: Optional[str] = Field(default=None, description="Synopsis or plot overview")
     has_spoiler_tags: bool = Field(default=False, description="Whether this anime contains spoiler tags in narrative metadata")
+    prequel_ids: List[int] = Field(default_factory=list, description="List of AniList prequel/parent anime IDs")
+    is_sequel: bool = Field(default=False, description="Whether this anime is a sequel or later season")
     compatibility_score: Optional[float] = Field(
         default=None,
         ge=0.0,
@@ -382,6 +386,8 @@ class AnimePublicResponse(BaseModel):
             tags=clean_tags,
             description=entity.description,
             has_spoiler_tags=has_spoilers,
+            prequel_ids=list(getattr(entity, "prequel_ids", []) or []),
+            is_sequel=bool(getattr(entity, "is_sequel", False)),
             compatibility_score=compatibility_score,
             match_percentage=computed_pct,
             origin_track=origin_track,

@@ -358,6 +358,8 @@ class SpoilerService:
             tags=clean_tags,
             description=desc_pt or anime.description,
             has_spoiler_tags=has_spoilers,
+            prequel_ids=list(getattr(anime, "prequel_ids", []) or []),
+            is_sequel=bool(getattr(anime, "is_sequel", False)),
             compatibility_score=compatibility_score,
             match_percentage=computed_pct,
             origin_track=origin_track,
