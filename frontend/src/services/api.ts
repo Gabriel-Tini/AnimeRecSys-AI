@@ -46,6 +46,10 @@ import type {
   UserProfileData,
   WatchHistoryEntry,
 } from '../types';
+import {
+  loadUserBackupFromFirestore,
+  saveUserBackupToFirestore,
+} from './firebaseAuth';
 
 const API_BASE_URL = '/api';
 const STORAGE_KEY_PROFILE = 'animerecsys_profile_v1';
@@ -130,6 +134,7 @@ function persistLocalState(): void {
           saved_at: new Date().toISOString(),
         };
         window.localStorage.setItem(STORAGE_KEY_GOOGLE_BACKUPS, JSON.stringify(backups));
+        void saveUserBackupToFirestore(fallbackProfile, fallbackHistory);
       }
     }
   } catch {
@@ -771,12 +776,47 @@ export async function editRating(payload: EditRatingSubmission): Promise<RateRes
 
   const now = new Date().toISOString();
   let updatedEntry: WatchHistoryEntry | null = null;
+  const targetAnime = activeCatalog.find((a) => a.id === payload.anime_id);
+  let tuningForEdit: SemanticTuningResponse | undefined = undefined;
+  const trimmedReview = payload.user_review?.trim().slice(0, 300);
+
+  if (trimmedReview && targetAnime) {
+    const isNegative = clampedRating < 5.5;
+    const impactSign = isNegative ? -0.8 : 0.85;
+    const extractedDeltas: SemanticTagDelta[] = [];
+    for (const g of (targetAnime.genres || []).slice(0, 2)) {
+      extractedDeltas.push({
+        tag_name: g,
+        impact_multiplier: impactSign,
+        confidence: 0.9,
+        rationale: `Calibração semântica (${isNegative ? 'redução' : 'reforço'}) em ${g} ao editar avaliação.`,
+      });
+    }
+    for (const t of (targetAnime.tags || []).slice(0, 2)) {
+      if (typeof t === 'object' && t.name && !t.is_media_spoiler) {
+        extractedDeltas.push({
+          tag_name: t.name,
+          impact_multiplier: impactSign,
+          confidence: 0.88,
+          rationale: `Ajuste temático em ${t.name} a partir do novo comentário.`,
+        });
+      }
+    }
+    if (extractedDeltas.length > 0) {
+      tuningForEdit = {
+        identified_tags: extractedDeltas,
+        public_safe_reason: `Nosso algoritmo recalibrou os pesos de ${extractedDeltas.map((d) => d.tag_name).join(', ')} com base na sua edição.`,
+      };
+    }
+  }
+
   fallbackHistory = fallbackHistory.map((h) => {
     if (h.anime_id === payload.anime_id) {
       updatedEntry = {
         ...h,
         rating: clampedRating,
-        user_review_raw: payload.user_review?.slice(0, 300) ?? h.user_review_raw,
+        user_review_raw: trimmedReview ?? h.user_review_raw,
+        qualitative_tuning: tuningForEdit ?? h.qualitative_tuning,
         timestamp: now,
       };
       return updatedEntry;
@@ -799,6 +839,50 @@ export async function editRating(payload: EditRatingSubmission): Promise<RateRes
     updated_recommendations: updatedRecs,
     history_entry: updatedEntry ?? undefined,
     message: 'Avaliação atualizada e pesos recalculados.',
+  };
+}
+
+/**
+ * Cancels/removes an anime rating completely, restoring the profile weights and recommendations as if never rated.
+ */
+export async function cancelRating(animeId: number): Promise<RateResponse> {
+  const data = await fetchBackendJson<RateResponse>(`${API_BASE_URL}/rate/cancel`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ anime_id: animeId }),
+  });
+  if (data && data.new_profile) {
+    fallbackProfile = data.new_profile;
+    fallbackHistory = fallbackHistory.filter((h) => h.anime_id !== animeId);
+    void autoSyncGoogleIfConnected();
+    if (data.updated_recommendations) {
+      data.updated_recommendations = {
+        ...data.updated_recommendations,
+        affinity_track: data.updated_recommendations.affinity_track.map(sanitizePublicAnime),
+        discovery_track: data.updated_recommendations.discovery_track.map(sanitizePublicAnime),
+      };
+    }
+    return data;
+  }
+
+  await ensureStaticCatalogLoaded();
+  fallbackHistory = fallbackHistory.filter((h) => h.anime_id !== animeId);
+
+  const now = new Date().toISOString();
+  fallbackProfile = {
+    ...fallbackProfile,
+    updated_at: now,
+    total_ratings: fallbackHistory.filter((h) => h.interaction_status !== 'dropped').length,
+    feature_weights: recalculateProfileWeightsFromHistory(fallbackProfile, fallbackHistory),
+  };
+  persistLocalState();
+
+  const updatedRecs = computeFallbackRecommendations(fallbackProfile, fallbackHistory);
+  return {
+    success: true,
+    new_profile: structuredClone(fallbackProfile),
+    updated_recommendations: updatedRecs,
+    message: 'Avaliação cancelada e nota removida do histórico.',
   };
 }
 
@@ -1194,12 +1278,68 @@ export async function googleSignIn(payload: GoogleAuthPayload): Promise<GoogleAu
   const name = (payload.name || email.split('@')[0]).trim();
   const emailKey = email.toLowerCase();
 
-  // Restore backup if one exists for this Google email
+  // 1. Try restoring cross-device backup from Cloud Firestore (Mobile <-> PC <-> Android TV)
+  const uid = payload.sub || `google-${email}`;
+  if (uid && !uid.startsWith('google-')) {
+    const cloudBackup = await loadUserBackupFromFirestore(uid);
+    if (cloudBackup && cloudBackup.profile && Array.isArray(cloudBackup.history)) {
+      const isLocalDefault =
+        fallbackHistory.length <= 2 &&
+        fallbackHistory.every((h) => h.id === 'wh-001' || h.id === 'wh-002');
+      if (isLocalDefault || cloudBackup.history.length >= fallbackHistory.length) {
+        // Merge history entries by anime_id (cloud entries take precedence unless local is newer)
+        const historyMap = new Map<number, WatchHistoryEntry>();
+        for (const h of fallbackHistory) {
+          if (!isLocalDefault) historyMap.set(h.anime_id, h);
+        }
+        for (const h of cloudBackup.history) {
+          historyMap.set(h.anime_id, h);
+        }
+        fallbackHistory = Array.from(historyMap.values());
+        fallbackProfile = {
+          ...cloudBackup.profile,
+          favorite_anime_ids: Array.from(
+            new Set([
+              ...(fallbackProfile.favorite_anime_ids ?? []),
+              ...(cloudBackup.profile.favorite_anime_ids ?? []),
+            ])
+          ),
+          watchlist_anime_ids: Array.from(
+            new Set([
+              ...(fallbackProfile.watchlist_anime_ids ?? []),
+              ...(cloudBackup.profile.watchlist_anime_ids ?? []),
+            ])
+          ),
+          skipped_anime_ids: Array.from(
+            new Set([
+              ...(fallbackProfile.skipped_anime_ids ?? []),
+              ...(cloudBackup.profile.skipped_anime_ids ?? []),
+            ])
+          ),
+          dropped_anime_ids: Array.from(
+            new Set([
+              ...(fallbackProfile.dropped_anime_ids ?? []),
+              ...(cloudBackup.profile.dropped_anime_ids ?? []),
+            ])
+          ),
+        };
+        fallbackProfile.total_ratings = fallbackHistory.filter(
+          (h) => h.interaction_status !== 'dropped'
+        ).length;
+        fallbackProfile.feature_weights = recalculateProfileWeightsFromHistory(
+          fallbackProfile,
+          fallbackHistory
+        );
+      }
+    }
+  }
+
+  // 2. Also check local storage backup if one exists for this Google email
   try {
     const rawBackups = window.localStorage.getItem(STORAGE_KEY_GOOGLE_BACKUPS);
     const backups = rawBackups ? JSON.parse(rawBackups) : {};
     if (backups[emailKey]?.profile && Array.isArray(backups[emailKey]?.history)) {
-      if (backups[emailKey].history.length >= fallbackHistory.length) {
+      if (backups[emailKey].history.length > fallbackHistory.length) {
         fallbackProfile = backups[emailKey].profile;
         fallbackHistory = backups[emailKey].history;
       }
@@ -1212,7 +1352,7 @@ export async function googleSignIn(payload: GoogleAuthPayload): Promise<GoogleAu
     ...fallbackProfile,
     updated_at: now,
     google_account: {
-      sub: payload.sub || `google-${email}`,
+      sub: uid,
       email,
       name,
       picture: payload.picture || null,

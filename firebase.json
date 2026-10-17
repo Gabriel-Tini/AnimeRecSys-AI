@@ -21,6 +21,9 @@
         "supportEmail": "hgabriel812@gmail.com"
       }
     }
+  },
+  "firestore": {
+    "rules": "firestore.rules"
   }
 }
 

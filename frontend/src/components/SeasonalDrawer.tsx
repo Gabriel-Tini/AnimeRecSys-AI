@@ -25,6 +25,8 @@ interface SeasonalDrawerProps {
   onToggleFavorite?: (anime: AnimePublic) => void;
   watchlistIds?: Set<number>;
   favoriteIds?: Set<number>;
+  ratedMap?: Record<number, number>;
+  knownAnimesMap?: Record<number, AnimePublic>;
 }
 
 const SEASON_TRANSLATIONS: Record<string, string> = {
@@ -42,6 +44,8 @@ export const SeasonalDrawer: React.FC<SeasonalDrawerProps> = ({
   onToggleFavorite,
   watchlistIds = new Set(),
   favoriteIds = new Set(),
+  ratedMap = {},
+  knownAnimesMap = {},
 }) => {
   const [seasonalItems, setSeasonalItems] = useState<SeasonalAnimeItem[]>([]);
   const [seasonName, setSeasonName] = useState<string>('Temporada Atual');
@@ -89,23 +93,27 @@ export const SeasonalDrawer: React.FC<SeasonalDrawerProps> = ({
     );
   });
 
-  const convertToAnimePublic = (item: SeasonalAnimeItem): AnimePublic => ({
-    id: item.id,
-    title_romaji: item.title_romaji,
-    title_english: item.title_english,
-    title_native: item.title_native,
-    cover_image: item.cover_image,
-    banner_image: item.banner_image,
-    format: item.format || 'TV',
-    episodes: item.episodes,
-    status: item.status || 'RELEASING',
-    season_year: item.season_year,
-    genres: item.genres || [],
-    tags: [],
-    description: item.description,
-    average_score: item.average_score,
-    has_spoiler_tags: false,
-  });
+  const convertToAnimePublic = (item: SeasonalAnimeItem): AnimePublic => {
+    const known = knownAnimesMap[item.id];
+    return {
+      id: item.id,
+      title_romaji: item.title_romaji || known?.title_romaji || `Anime #${item.id}`,
+      title_english: item.title_english || known?.title_english || null,
+      title_native: item.title_native || known?.title_native || null,
+      cover_image: item.cover_image || known?.cover_image || FALLBACK_ANIME_POSTER,
+      banner_image: item.banner_image || known?.banner_image || null,
+      format: item.format || known?.format || 'TV',
+      episodes: item.episodes ?? known?.episodes ?? null,
+      status: item.status || known?.status || 'RELEASING',
+      season_year: item.season_year ?? known?.season_year ?? seasonYear,
+      genres: item.genres?.length ? item.genres : known?.genres || [],
+      tags: known?.tags || [],
+      description: item.description || known?.description || null,
+      average_score: item.average_score ?? known?.average_score ?? null,
+      popularity: item.popularity ?? known?.popularity,
+      has_spoiler_tags: Boolean(known?.has_spoiler_tags),
+    };
+  };
 
   return (
     <>
@@ -267,8 +275,13 @@ export const SeasonalDrawer: React.FC<SeasonalDrawerProps> = ({
                         </div>
                       </div>
 
-                      {/* Badges: Format & Studio */}
+                      {/* Badges: Format, Studio & User Rating */}
                       <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                        {ratedMap[item.id] !== undefined && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/20 border border-emerald-500/40 text-emerald-300">
+                            Sua Nota: {ratedMap[item.id]}/10
+                          </span>
+                        )}
                         <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-white/5 border border-white/10 text-slate-300">
                           {item.format || 'TV'}
                         </span>

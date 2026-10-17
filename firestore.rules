@@ -1,0 +1,127 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// This security rules file assumes the following data structures:
+//
+// Collection: users
+// Document ID: {userId} (Firebase Auth UID of the authenticated Google user)
+// Fields:
+//   - profile: map (required, max 50 keys) - User recommendation profile vector, hyperparameters, and filter preferences
+//   - history: list (required, max 5000 items) - User watch history and anime rating entries
+//   - updated_at: string (required, ISO 8601 timestamp string, length 1..64) - Last synchronization timestamp
+//   - email: string (optional, valid email format, length 3..254) - User's Google account email address (PII, owner-only access)
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    // Check if the user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Check if user owns the resource (for user-owned documents)
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Check if user is owner based on document's uid field
+    function isDocOwner() {
+      return isAuthenticated() && (!('uid' in resource.data) || request.auth.uid == resource.data.uid);
+    }
+
+    // Verify UID hasn't been tampered with on create
+    function uidUnchanged() {
+      return !('uid' in request.resource.data) ||
+        request.resource.data.uid == request.auth.uid;
+    }
+
+    // Ensure uid field is not modified on update
+    function uidNotModified() {
+      return !('uid' in request.resource.data) ||
+        request.resource.data.uid == resource.data.uid;
+    }
+
+    // Validate required fields exist
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    // Validate that the document contains only the allowed fields
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // Validate string length
+    function validStringLength(field, minLen, maxLen) {
+      return request.resource.data[field] is string &&
+        request.resource.data[field].size() >= minLen &&
+        request.resource.data[field].size() <= maxLen;
+    }
+
+    // Validate optional string (if present, must be string and within length)
+    function isValidOptionalString(field, minLen, maxLen) {
+      return !(field in request.resource.data) ||
+        (request.resource.data[field] is string &&
+         request.resource.data[field].size() >= minLen &&
+         request.resource.data[field].size() <= maxLen);
+    }
+
+    // Validate email format
+    function isValidEmail(email) {
+      return email is string &&
+        email.size() >= 3 &&
+        email.size() <= 254 &&
+        email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    // Validate that a list is a list and enforces size limits
+    function isValidList(listData, maxSize) {
+      return listData is list && listData.size() <= maxSize;
+    }
+
+    // Validate that a map is a map and enforces key count limits
+    function isValidMapSize(mapData, maxKeys) {
+      return mapData is map && mapData.keys().size() <= maxKeys;
+    }
+
+    // ===============================================================
+    // Domain Validators (CRITICAL: Used in both create and update)
+    // ===============================================================
+
+    function isValidUserDocument(data) {
+      return hasOnlyAllowedFields(['profile', 'history', 'updated_at', 'email']) &&
+        hasRequiredFields(['profile', 'history', 'updated_at']) &&
+        isValidMapSize(data.profile, 50) &&
+        isValidList(data.history, 5000) &&
+        validStringLength('updated_at', 1, 64) &&
+        isValidOptionalString('email', 3, 254) &&
+        (!('email' in data) || isValidEmail(data.email));
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    // Personal recommendation state per authenticated Google user
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && uidUnchanged() && isValidUserDocument(request.resource.data);
+      allow update: if isOwner(userId) && isDocOwner() && uidNotModified() && isValidUserDocument(request.resource.data);
+      allow delete: if isOwner(userId) && isDocOwner();
+    }
+
+    // Default deny for all other collections and documents
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

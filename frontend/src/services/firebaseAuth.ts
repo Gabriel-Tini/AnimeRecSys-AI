@@ -8,6 +8,14 @@ import {
   type Auth,
   type User,
 } from 'firebase/auth';
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc,
+  type Firestore,
+} from 'firebase/firestore';
+import type { UserProfileData, WatchHistoryEntry } from '../types';
 
 const firebaseConfig = {
   apiKey: ['AIza', 'SyCn3Vx_dBnJ6-w9myxOcIyr7pbXPe0r7Hk'].join(''),
@@ -20,17 +28,31 @@ const firebaseConfig = {
 
 let appInstance: FirebaseApp | null = null;
 let authInstance: Auth | null = null;
+let dbInstance: Firestore | null = null;
 
-function getFirebaseAuth(): Auth {
+function getFirebaseApp(): FirebaseApp {
   if (!appInstance) {
     const existing = getApps();
     appInstance = existing.length > 0 ? existing[0] : initializeApp(firebaseConfig);
   }
+  return appInstance;
+}
+
+function getFirebaseAuth(): Auth {
+  const app = getFirebaseApp();
   if (!authInstance) {
-    authInstance = getAuth(appInstance);
+    authInstance = getAuth(app);
     authInstance.languageCode = 'pt-BR';
   }
   return authInstance;
+}
+
+function getFirebaseDb(): Firestore {
+  const app = getFirebaseApp();
+  if (!dbInstance) {
+    dbInstance = getFirestore(app);
+  }
+  return dbInstance;
 }
 
 export interface FirebaseGoogleUser {
@@ -38,6 +60,13 @@ export interface FirebaseGoogleUser {
   email: string;
   displayName: string;
   photoURL: string | null;
+}
+
+export interface CloudUserBackup {
+  profile: UserProfileData;
+  history: WatchHistoryEntry[];
+  updated_at: string;
+  email?: string;
 }
 
 /**
@@ -99,4 +128,57 @@ export function subscribeToGoogleAuthChanges(
   } catch {
     return () => {};
   }
+}
+
+/**
+ * Saves user profile and watch history directly to Cloud Firestore under users/{uid}
+ * for real cross-device synchronization (Mobile <-> PC <-> Android TV).
+ */
+export async function saveUserBackupToFirestore(
+  profile: UserProfileData,
+  history: WatchHistoryEntry[]
+): Promise<void> {
+  try {
+    const auth = getFirebaseAuth();
+    const uid = auth.currentUser?.uid || profile.google_account?.sub;
+    if (!uid || uid.startsWith('google-')) return;
+
+    const db = getFirebaseDb();
+    const userDocRef = doc(db, 'users', uid);
+    const rawEmail = (profile.google_account?.email || auth.currentUser?.email || '').trim();
+    const payload: CloudUserBackup = {
+      profile: JSON.parse(JSON.stringify(profile)) as UserProfileData,
+      history: JSON.parse(JSON.stringify(history)) as WatchHistoryEntry[],
+      updated_at: new Date().toISOString(),
+    };
+    if (rawEmail && rawEmail.includes('@') && rawEmail.length >= 3) {
+      payload.email = rawEmail;
+    }
+    await setDoc(userDocRef, payload);
+  } catch {
+    // Silently ignore if offline or running in unit tests without network
+  }
+}
+
+/**
+ * Loads user profile and watch history from Cloud Firestore under users/{uid}.
+ */
+export async function loadUserBackupFromFirestore(
+  uid: string
+): Promise<CloudUserBackup | null> {
+  try {
+    if (!uid || uid.startsWith('google-')) return null;
+    const db = getFirebaseDb();
+    const userDocRef = doc(db, 'users', uid);
+    const snap = await getDoc(userDocRef);
+    if (snap.exists()) {
+      const data = snap.data() as CloudUserBackup;
+      if (data && data.profile && Array.isArray(data.history)) {
+        return data;
+      }
+    }
+  } catch {
+    // Silently ignore if offline
+  }
+  return null;
 }

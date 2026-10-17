@@ -734,6 +734,75 @@ def edit_anime_rating(
     )
 
 
+class CancelRatingRequest(BaseModel):
+    """Request DTO for POST /api/rate/cancel."""
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
+    anime_id: int = Field(..., gt=0, description="AniList anime identifier whose rating should be cancelled")
+
+
+@router.post(
+    "/rate/cancel",
+    response_model=RateResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Cancel/delete an anime rating and recalibrate user profile weights",
+)
+def cancel_anime_rating(
+    request: CancelRatingRequest,
+    storage: StorageManager = Depends(get_storage_manager),
+    learning_engine: LearningEngine = Depends(get_learning_engine),
+    rec_engine: RecommendationEngine = Depends(get_recommendation_engine),
+) -> RateResponse:
+    """
+    Removes a rating from watch history and recalibrates user profile feature weights from scratch
+    so an accidental evaluation leaves zero distortion in the algorithm.
+    """
+    catalog = storage.load_catalog()
+    catalog_by_id = {a.id: a for a in catalog}
+    current_history = storage.load_watch_history()
+    updated_history = [h for h in current_history if h.anime_id != request.anime_id]
+    storage.save_watch_history(updated_history)
+    now_utc = datetime.now(timezone.utc)
+
+    def recalibrate_after_cancel(prof: UserProfileData) -> UserProfileData:
+        temp_prof = prof.model_copy(
+            update={
+                "feature_weights": {},
+                "total_ratings": 0,
+                "updated_at": now_utc,
+            }
+        )
+        for h in updated_history:
+            if h.interaction_status == "watched" and h.anime_id in catalog_by_id:
+                ent = catalog_by_id[h.anime_id]
+                temp_prof = learning_engine.update_profile_rating(
+                    profile=temp_prof,
+                    rated_anime=ent,
+                    rating=h.rating,
+                    qualitative_tuning=h.qualitative_tuning,
+                )
+        return temp_prof
+
+    updated_profile = storage.update_user_profile(recalibrate_after_cancel)
+    _sync_google_account_snapshot(storage, updated_profile)
+
+    updated_recs = rec_engine.generate_recommendations(
+        profile=updated_profile,
+        catalog=catalog,
+        history=updated_history,
+        top_k=10,
+    )
+
+    return RateResponse(
+        success=True,
+        new_profile=updated_profile,
+        updated_recommendations=updated_recs,
+        history_entry=None,
+        message="Avaliação cancelada e pesos recalibrados com sucesso!",
+    )
+
+
+
 
 @router.post(
     "/tune",

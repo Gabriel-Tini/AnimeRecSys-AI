@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Sparkles, X, Send, CheckCircle2, Ban } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Sparkles, X, Send, CheckCircle2, Ban, RotateCcw } from 'lucide-react';
 import type { AnimePublic, SemanticTuningResponse } from '../types';
 
 interface QualitativeModalProps {
@@ -11,6 +11,7 @@ interface QualitativeModalProps {
   tuningResult: SemanticTuningResponse | null;
   onClose: () => void;
   onSubmitFeedback: (animeId: number, feedback: string) => void;
+  onCancelRating?: (animeId: number) => void;
 }
 
 const QUICK_SUGGESTION_PILLS = [
@@ -38,8 +39,13 @@ export const QualitativeModal: React.FC<QualitativeModalProps> = ({
   tuningResult,
   onClose,
   onSubmitFeedback,
+  onCancelRating,
 }) => {
   const [feedback, setFeedback] = useState('');
+
+  useEffect(() => {
+    setFeedback('');
+  }, [anime?.id, isOpen, mode]);
 
   if (!isOpen || !anime) return null;
 
@@ -59,14 +65,14 @@ export const QualitativeModal: React.FC<QualitativeModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="qualitative-modal-title"
-      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-150"
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/80 backdrop-blur-md p-3 sm:p-4 animate-in fade-in duration-150"
     >
-      <div className="w-full max-w-lg bg-[#11141c] border border-[#232936] rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+      <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto bg-[#11141c] border border-[#232936] rounded-2xl shadow-2xl animate-in fade-in zoom-in-95 duration-150">
         {/* Modal Header */}
-        <div className="px-5 py-4 bg-[#171b26] border-b border-[#232936] flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
+        <div className="px-4 sm:px-5 py-3.5 sm:py-4 bg-[#171b26] border-b border-[#232936] flex items-center justify-between sticky top-0 z-10">
+          <div className="flex items-center gap-2.5 min-w-0">
             <div
-              className={`p-2 rounded-lg border ${
+              className={`p-2 rounded-lg border shrink-0 ${
                 isDropMode
                   ? 'bg-rose-500/15 text-rose-400 border-rose-500/30'
                   : 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30'
@@ -74,13 +80,13 @@ export const QualitativeModal: React.FC<QualitativeModalProps> = ({
             >
               {isDropMode ? <Ban className="w-4 h-4" /> : <Sparkles className="w-4 h-4" />}
             </div>
-            <div>
-              <h3 id="qualitative-modal-title" className="text-sm font-bold text-white">
+            <div className="min-w-0">
+              <h3 id="qualitative-modal-title" className="text-sm font-bold text-white truncate">
                 {isDropMode
                   ? 'Análise de Abandono (Drop) • Ajuste Inteligente'
                   : 'Calibração Semântica do Algoritmo'}
               </h3>
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-slate-400 truncate">
                 {isDropMode ? (
                   <>
                     Você decidiu dropar <strong>{displayTitle}</strong>
@@ -102,14 +108,14 @@ export const QualitativeModal: React.FC<QualitativeModalProps> = ({
               onClose();
             }}
             aria-label="Fechar modal"
-            className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/5"
+            className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-white/5 shrink-0"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Modal Body */}
-        <div className="p-5 space-y-4">
+        <div className="p-4 sm:p-5 space-y-4">
           {tuningResult ? (
             <div className="space-y-4">
               <div
@@ -190,7 +196,7 @@ export const QualitativeModal: React.FC<QualitativeModalProps> = ({
                       key={pill}
                       type="button"
                       onClick={() => setFeedback(pill)}
-                      className={`px-2.5 py-1 rounded-full text-[11px] bg-[#171b26] text-slate-300 border border-white/10 transition-colors ${
+                      className={`px-2.5 py-1 rounded-full text-[11px] bg-[#171b26] text-slate-300 border border-white/10 text-left transition-colors ${
                         isDropMode
                           ? 'hover:bg-rose-600/20 hover:text-rose-300 hover:border-rose-500/30'
                           : 'hover:bg-indigo-600/20 hover:text-indigo-300 hover:border-indigo-500/30'
@@ -230,31 +236,51 @@ export const QualitativeModal: React.FC<QualitativeModalProps> = ({
                   </span>
                 </div>
               ) : (
-                <div className="flex items-center justify-end gap-2 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFeedback('');
-                      onClose();
-                    }}
-                    className="px-3.5 py-2 rounded-xl text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-white/5"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={!feedback.trim()}
-                    className={`px-4 py-2 rounded-xl text-xs font-semibold disabled:opacity-40 text-white flex items-center gap-1.5 transition-colors ${
-                      isDropMode
-                        ? 'bg-rose-600 hover:bg-rose-500'
-                        : 'bg-indigo-600 hover:bg-indigo-500'
-                    }`}
-                  >
-                    <Send className="w-3.5 h-3.5" />
-                    <span>
-                      {isDropMode ? 'Registrar Motivo do Drop' : 'Calibrar Recomendações'}
-                    </span>
-                  </button>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-white/5">
+                  {!isDropMode && onCancelRating ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFeedback('');
+                        onCancelRating(anime.id);
+                        onClose();
+                      }}
+                      data-testid="cancel-rating-undo-btn"
+                      className="px-3 py-2 rounded-xl text-xs font-semibold text-rose-300 hover:text-white bg-rose-950/40 hover:bg-rose-600/80 border border-rose-500/30 flex items-center justify-center gap-1.5 transition-colors"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>Cancelar Avaliação (Desfazer Nota)</span>
+                    </button>
+                  ) : (
+                    <div />
+                  )}
+
+                  <div className="flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFeedback('');
+                        onClose();
+                      }}
+                      className="px-3.5 py-2 rounded-xl text-xs font-medium text-slate-300 hover:text-white bg-[#171b26] hover:bg-white/10 border border-white/10 transition-colors"
+                    >
+                      {isDropMode ? 'Cancelar' : 'Pular Comentário (Manter Nota)'}
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={!feedback.trim()}
+                      className={`px-4 py-2 rounded-xl text-xs font-semibold disabled:opacity-40 text-white flex items-center gap-1.5 transition-colors ${
+                        isDropMode
+                          ? 'bg-rose-600 hover:bg-rose-500'
+                          : 'bg-indigo-600 hover:bg-indigo-500'
+                      }`}
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                      <span>
+                        {isDropMode ? 'Registrar Motivo do Drop' : 'Calibrar Recomendações'}
+                      </span>
+                    </button>
+                  </div>
                 </div>
               )}
             </form>

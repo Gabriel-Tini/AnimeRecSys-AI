@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bell,
   Flame,
@@ -23,6 +23,7 @@ import {
   RefreshCw,
   Star,
   Edit3,
+  Trash2,
 } from 'lucide-react';
 import { Navbar } from './components/Navbar';
 import { SearchBar } from './components/SearchBar';
@@ -35,6 +36,7 @@ import { AnimeCard } from './components/AnimeCard';
 import { AnimeDetailModal } from './components/AnimeDetailModal';
 import { SeasonalDrawer } from './components/SeasonalDrawer';
 import {
+  cancelRating,
   checkBackendHealth,
   dropAnime,
   editRating,
@@ -160,6 +162,7 @@ export const App: React.FC = () => {
   const [lastSafeReason, setLastSafeReason] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [showFilterPanel, setShowFilterPanel] = useState<boolean>(true);
+  const [confirmResetOpen, setConfirmResetOpen] = useState<boolean>(false);
 
   // Real Google OAuth State
   const [isSyncingGoogle, setIsSyncingGoogle] = useState(false);
@@ -183,12 +186,14 @@ export const App: React.FC = () => {
     favorites: number;
   } | null>(null);
 
-  // Explore Tab Filters
+  // Explore Tab Filters & Infinite Scroll
   const [exploreQuery, setExploreQuery] = useState('');
   const [exploreGenre, setExploreGenre] = useState<string>('ALL');
   const [exploreFormat, setExploreFormat] = useState<string>('ALL');
   const [exploreSort, setExploreSort] = useState<'score' | 'popularity' | 'year' | 'title'>('popularity');
   const [hideInteractedInExplore, setHideInteractedInExplore] = useState(false);
+  const [exploreVisibleCount, setExploreVisibleCount] = useState<number>(24);
+  const exploreSentinelRef = useRef<HTMLDivElement | null>(null);
 
   // Qualitative / Drop Modal State
   const [modalOpen, setModalOpen] = useState(false);
@@ -710,12 +715,42 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleCancelRating = async (animeId: number) => {
+    try {
+      const res = await cancelRating(animeId);
+      setProfile(res.new_profile);
+      setRatedMap((prev) => {
+        const next = { ...prev };
+        delete next[animeId];
+        return next;
+      });
+      setWatchHistory((prev) => prev.filter((h) => h.anime_id !== animeId));
+      if (res.updated_recommendations) {
+        setRecommendations(res.updated_recommendations);
+        registerKnownAnimes([
+          ...res.updated_recommendations.affinity_track,
+          ...res.updated_recommendations.discovery_track,
+        ]);
+      } else {
+        const freshRecs = await fetchRecommendations(10);
+        setRecommendations(freshRecs);
+      }
+      if (editingHistoryEntry?.anime_id === animeId) {
+        setEditingHistoryEntry(null);
+      }
+      showToast('Avaliação cancelada! A nota foi removida e os pesos do algoritmo foram restaurados.');
+    } catch {
+      showToast('Não foi possível cancelar a avaliação.');
+    }
+  };
+
   const handleResetProfile = async () => {
     const freshProfile = await resetUserProfile();
     setProfile(freshProfile);
     setRatedMap({});
     setWatchHistory([]);
     setLastSafeReason(null);
+    setConfirmResetOpen(false);
     const freshRecs = await fetchRecommendations(10);
     setRecommendations(freshRecs);
     showToast('Preferências e histórico resetados para o estado inicial.');
@@ -802,6 +837,30 @@ export const App: React.FC = () => {
     blockedGenresSet,
   ]);
 
+  // Reset Infinite Scroll batch count whenever Explore filters change
+  useEffect(() => {
+    setExploreVisibleCount(24);
+  }, [exploreQuery, exploreGenre, exploreFormat, exploreSort, hideInteractedInExplore, activeTab]);
+
+  // Infinite Scroll IntersectionObserver for Explorar Tab
+  useEffect(() => {
+    if (activeTab !== 'explore') return;
+    if (exploreVisibleCount >= exploreAnimes.length) return;
+    const node = exploreSentinelRef.current;
+    if (!node || typeof IntersectionObserver === 'undefined') return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setExploreVisibleCount((prev) => Math.min(prev + 24, exploreAnimes.length));
+        }
+      },
+      { rootMargin: '320px' }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [activeTab, exploreVisibleCount, exploreAnimes.length]);
+
   // Helper to resolve any anime ID from knownAnimesMap or fullCatalog with guaranteed fallback
   const resolveAnimeById = useCallback(
     (id: number): AnimePublic => {
@@ -884,7 +943,7 @@ export const App: React.FC = () => {
         onSelectTab={setActiveTab}
         isOnline={isOnline}
         totalRatings={profile.total_ratings}
-        onResetProfile={handleResetProfile}
+        onResetProfile={() => setConfirmResetOpen(true)}
         googleAccount={profile.google_account}
         onOpenGoogleModal={() => void handleRealGoogleLogin()}
         onGoogleLogout={() => void handleGoogleSignOut()}
@@ -903,13 +962,6 @@ export const App: React.FC = () => {
           />
 
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-            {toastMessage && (
-              <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-indigo-950/80 border border-indigo-500/40 text-xs text-indigo-200 shadow-lg animate-in fade-in duration-150">
-                <Sparkles className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                <span>{toastMessage}</span>
-              </div>
-            )}
-
             {/* Google Sign-In / Automatic Sync Status in Header */}
             {profile.google_account ? (
               <div
@@ -1253,6 +1305,7 @@ export const App: React.FC = () => {
                 onDrop={(a, t) => handleOpenDropModal(a, t)}
                 onToggleFavorite={(a) => void handleToggleFavorite(a)}
                 onToggleWatchlist={(a) => void handleToggleWatchlist(a)}
+                onExploreAll={() => setActiveTab('explore')}
                 ratedMap={ratedMap}
                 favoriteIds={favoriteIds}
                 watchlistIds={watchlistIds}
@@ -1372,25 +1425,55 @@ export const App: React.FC = () => {
                   Nenhuma obra encontrada para os filtros selecionados.
                 </div>
               ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                  {exploreAnimes.map((anime) => (
-                    <AnimeCard
-                      key={anime.id}
-                      anime={anime}
-                      trackType="onboarding"
-                      onRate={(a, r, t) => void handleRateAnime(a, r, t)}
-                      onSelect={(a) => setSelectedDetailAnime(a)}
-                      onSkip={(a) => void handleSkipAnime(a)}
-                      onDrop={(a, t) => handleOpenDropModal(a, t)}
-                      onToggleFavorite={(a) => void handleToggleFavorite(a)}
-                      onToggleWatchlist={(a) => void handleToggleWatchlist(a)}
-                      userRating={ratedMap[anime.id]}
-                      isFavorite={favoriteIds.has(anime.id)}
-                      isInWatchlist={watchlistIds.has(anime.id)}
-                      isDropped={droppedIds.has(anime.id)}
-                    />
-                  ))}
-                </div>
+                <>
+                  <div className="flex items-center justify-between px-1 text-xs text-slate-400">
+                    <span>
+                      Exibindo <strong className="text-slate-200">{Math.min(exploreVisibleCount, exploreAnimes.length)}</strong> de{' '}
+                      <strong className="text-slate-200">{exploreAnimes.length}</strong> obras encontradas
+                    </span>
+                    <span className="font-mono text-[11px] text-indigo-400">
+                      Rolagem infinita ativa
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                    {exploreAnimes.slice(0, exploreVisibleCount).map((anime) => (
+                      <AnimeCard
+                        key={anime.id}
+                        anime={anime}
+                        trackType="onboarding"
+                        onRate={(a, r, t) => void handleRateAnime(a, r, t)}
+                        onSelect={(a) => setSelectedDetailAnime(a)}
+                        onSkip={(a) => void handleSkipAnime(a)}
+                        onDrop={(a, t) => handleOpenDropModal(a, t)}
+                        onToggleFavorite={(a) => void handleToggleFavorite(a)}
+                        onToggleWatchlist={(a) => void handleToggleWatchlist(a)}
+                        userRating={ratedMap[anime.id]}
+                        isFavorite={favoriteIds.has(anime.id)}
+                        isInWatchlist={watchlistIds.has(anime.id)}
+                        isDropped={droppedIds.has(anime.id)}
+                      />
+                    ))}
+                  </div>
+
+                  {/* Infinite Scroll Sentinel */}
+                  {exploreVisibleCount < exploreAnimes.length && (
+                    <div
+                      ref={exploreSentinelRef}
+                      className="py-6 flex flex-col items-center justify-center gap-2 text-xs text-slate-400"
+                    >
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExploreVisibleCount((prev) => Math.min(prev + 24, exploreAnimes.length))
+                        }
+                        className="px-4 py-2 rounded-xl bg-[#171b26] hover:bg-[#1f2433] text-indigo-300 border border-indigo-500/30 font-semibold transition-colors"
+                      >
+                        Carregar mais obras ({exploreAnimes.length - exploreVisibleCount} restantes)
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </section>
           )}
@@ -1923,6 +2006,27 @@ export const App: React.FC = () => {
 
               {/* Simplified Genres View + Optional Advanced Vector Insights */}
               <ProfileMetrics profile={profile} spoilerTagsSet={SPOILER_KEYWORDS} />
+
+              {/* Mobile & Desktop Profile Reset Action Card */}
+              <div className="p-5 rounded-2xl bg-[#11141c] border border-rose-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-sm font-bold text-white flex items-center gap-2">
+                    <RotateCcw className="w-4 h-4 text-rose-400" />
+                    <span>Gerenciamento de Histórico e Preferências</span>
+                  </h2>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Deseja recomeçar a calibração do zero? Você pode limpar suas avaliações, listas e pesos sem desconectar sua conta Google.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setConfirmResetOpen(true)}
+                  className="px-4 py-2.5 rounded-xl text-xs font-semibold bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-500/30 flex items-center gap-2 transition-colors self-start sm:self-auto shrink-0"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Resetar Preferências</span>
+                </button>
+              </div>
             </section>
           )}
         </main>
@@ -2034,10 +2138,65 @@ export const App: React.FC = () => {
         </div>
       )}
 
+      {/* ==================================================================== */}
+      {/* CONFIRMATION MODAL FOR RESETTING PROFILE PREFERENCES                 */}
+      {/* ==================================================================== */}
+      {confirmResetOpen && (
+        <div className="fixed inset-0 z-[95] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-md rounded-2xl bg-[#11141c] border border-rose-500/30 p-6 shadow-2xl space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-rose-500/15 text-rose-400 border border-rose-500/30">
+                  <RotateCcw className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">
+                    Resetar Preferências e Histórico?
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Confirmação de segurança
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setConfirmResetOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Esta ação apagará suas <strong>{profile.total_ratings} avaliações</strong>, favoritos, lista "Quero Assistir", drops e recalibrará seu perfil para o estado inicial. Deseja realmente continuar?
+            </p>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setConfirmResetOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-medium bg-[#171b26] text-slate-300 hover:text-white border border-white/10"
+              >
+                Manter Meus Dados
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleResetProfile()}
+                data-testid="confirm-reset-profile-btn"
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-600/20 flex items-center gap-1.5 transition-colors"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Sim, Resetar Tudo</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Edit Rating & Recalibrate Modal */}
       {editingHistoryEntry && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
-          <div className="relative w-full max-w-md rounded-2xl bg-[#11141c] border border-amber-500/30 p-6 shadow-2xl space-y-5">
+          <div className="relative w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl bg-[#11141c] border border-amber-500/30 p-5 sm:p-6 shadow-2xl space-y-5">
             <div className="flex items-start justify-between">
               <div>
                 <span className="text-[10px] font-mono uppercase tracking-wider text-amber-400 font-bold px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">
@@ -2069,13 +2228,13 @@ export const App: React.FC = () => {
                     {editRatingValue}/10
                   </span>
                 </div>
-                <div className="grid grid-cols-10 gap-1 pt-1">
+                <div className="grid grid-cols-5 sm:grid-cols-10 gap-1.5 pt-1">
                   {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((score) => (
                     <button
                       key={score}
                       type="button"
                       onClick={() => setEditRatingValue(score)}
-                      className={`py-2 rounded-lg text-xs font-bold font-mono transition-all ${
+                      className={`py-2.5 sm:py-2 rounded-lg text-xs font-bold font-mono transition-all ${
                         editRatingValue === score
                           ? 'bg-amber-500 text-slate-950 shadow-md scale-105'
                           : 'bg-[#171b26] text-slate-300 hover:bg-[#232936] hover:text-white border border-white/5'
@@ -2101,27 +2260,38 @@ export const App: React.FC = () => {
               </div>
 
               <div className="p-3 rounded-xl bg-amber-500/5 border border-amber-500/20 text-[11px] text-amber-200/90 leading-relaxed">
-                💡 Ao salvar, todos os pesos das suas preferências serão recalculados imediatamente pelo nosso algoritmo sem distorções históricas.
+                💡 Ao salvar, a nota e o comentário recalibram imediatamente os pesos do seu perfil no algoritmo.
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2.5 pt-2">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pt-2 border-t border-white/5">
               <button
                 type="button"
-                onClick={() => setEditingHistoryEntry(null)}
-                className="px-4 py-2 rounded-xl text-xs font-medium bg-[#171b26] text-slate-300 hover:text-white border border-white/5"
+                onClick={() => void handleCancelRating(editingHistoryEntry.anime_id)}
+                className="px-3 py-2 rounded-xl text-xs font-semibold text-rose-300 hover:text-white bg-rose-950/40 hover:bg-rose-600/80 border border-rose-500/30 flex items-center justify-center gap-1.5 transition-colors"
               >
-                Cancelar
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Remover Avaliação</span>
               </button>
-              <button
-                type="button"
-                onClick={() => void handleSaveEditRating()}
-                disabled={isSavingEditRating}
-                className="px-4 py-2 rounded-xl text-xs font-semibold bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-lg shadow-amber-500/20 transition-all flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>{isSavingEditRating ? 'Recalibrando...' : 'Salvar Alteração'}</span>
-              </button>
+
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingHistoryEntry(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-medium bg-[#171b26] text-slate-300 hover:text-white border border-white/5"
+                >
+                  Fechar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleSaveEditRating()}
+                  disabled={isSavingEditRating}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-lg shadow-amber-500/20 transition-all flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>{isSavingEditRating ? 'Recalibrando...' : 'Salvar Alteração'}</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -2138,6 +2308,9 @@ export const App: React.FC = () => {
         onClose={() => setModalOpen(false)}
         onSubmitFeedback={(animeId, feedback) => {
           void handleSubmitModalFeedback(animeId, feedback);
+        }}
+        onCancelRating={(animeId) => {
+          void handleCancelRating(animeId);
         }}
       />
 
@@ -2203,7 +2376,31 @@ export const App: React.FC = () => {
         }}
         watchlistIds={watchlistIds}
         favoriteIds={favoriteIds}
+        ratedMap={ratedMap}
+        knownAnimesMap={knownAnimesMap}
       />
+
+      {/* Global Floating Toast Notification (Visible on Mobile, Tablet, Desktop & TV) */}
+      {toastMessage && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-20 md:bottom-6 right-3 left-3 sm:left-auto sm:max-w-md z-[100] flex items-center justify-between gap-2.5 px-4 py-3 rounded-2xl bg-[#131724]/95 backdrop-blur-md border border-indigo-500/40 text-xs sm:text-sm text-indigo-100 shadow-2xl animate-in fade-in slide-in-from-bottom-3 duration-200"
+        >
+          <div className="flex items-center gap-2.5 min-w-0">
+            <Sparkles className="w-4 h-4 text-indigo-400 shrink-0" />
+            <span className="leading-snug">{toastMessage}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setToastMessage(null)}
+            aria-label="Fechar aviso"
+            className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/5 shrink-0"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
     </div>
   );
 };

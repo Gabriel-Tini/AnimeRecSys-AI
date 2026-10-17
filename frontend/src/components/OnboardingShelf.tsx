@@ -1,5 +1,5 @@
-import React from 'react';
-import { Flame, Sword, Compass, Smile, Theater, Sparkles, Heart, Ghost, Cpu } from 'lucide-react';
+import React, { useState } from 'react';
+import { Flame, Sword, Compass, Smile, Theater, Sparkles, Heart, Ghost, Cpu, ChevronDown } from 'lucide-react';
 import { AnimeCard } from './AnimeCard';
 import type { AnimePublic } from '../types';
 
@@ -13,6 +13,7 @@ interface OnboardingShelfProps {
   onDrop?: (anime: AnimePublic, track: 'affinity' | 'discovery' | 'onboarding') => void;
   onToggleFavorite?: (anime: AnimePublic) => void;
   onToggleWatchlist?: (anime: AnimePublic) => void;
+  onExploreAll?: () => void;
   ratedMap: Record<number, number>;
   favoriteIds?: Set<number>;
   watchlistIds?: Set<number>;
@@ -40,11 +41,15 @@ export const OnboardingShelf: React.FC<OnboardingShelfProps> = ({
   onDrop,
   onToggleFavorite,
   onToggleWatchlist,
+  onExploreAll,
   ratedMap,
   favoriteIds,
   watchlistIds,
   droppedIds,
 }) => {
+  const [visibleCount, setVisibleCount] = useState(6);
+  const displayedAnimes = animes.slice(0, visibleCount);
+
   return (
     <section className="space-y-6">
       {/* Popular Genres Pills inspired by AnimeNest reference */}
@@ -71,7 +76,10 @@ export const OnboardingShelf: React.FC<OnboardingShelfProps> = ({
               <button
                 key={g.value}
                 type="button"
-                onClick={() => onSelectGenre(isSelected ? null : g.value)}
+                onClick={() => {
+                  onSelectGenre(isSelected ? null : g.value);
+                  setVisibleCount(6);
+                }}
                 className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium border transition-all shrink-0 ${
                   isSelected
                     ? 'bg-indigo-600 text-white border-indigo-500 shadow-md shadow-indigo-950/50'
@@ -88,7 +96,7 @@ export const OnboardingShelf: React.FC<OnboardingShelfProps> = ({
 
       {/* Onboarding Popular Grid */}
       <div className="space-y-3">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div>
             <div className="flex items-center gap-2">
               <Flame className="w-4 h-4 text-amber-400" />
@@ -100,13 +108,13 @@ export const OnboardingShelf: React.FC<OnboardingShelfProps> = ({
               Marque obras que você já assistiu para calibrar instantaneamente seu vetor de preferências, ou pule as que não tem interesse.
             </p>
           </div>
-          <span className="text-xs font-mono text-slate-400">
-            {animes.length} títulos exibidos
+          <span className="text-xs font-mono text-slate-400 shrink-0">
+            Exibindo {displayedAnimes.length} de {animes.length} títulos
           </span>
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-          {animes.slice(0, 6).map((anime) => (
+          {displayedAnimes.map((anime) => (
             <AnimeCard
               key={anime.id}
               anime={anime}
@@ -124,6 +132,31 @@ export const OnboardingShelf: React.FC<OnboardingShelfProps> = ({
             />
           ))}
         </div>
+
+        {animes.length > 6 && (
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+            {visibleCount < Math.min(animes.length, 24) && (
+              <button
+                type="button"
+                onClick={() => setVisibleCount((prev) => Math.min(prev + 6, animes.length))}
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-[#171b26] hover:bg-[#1f2433] text-slate-200 border border-white/10 flex items-center gap-1.5 transition-colors"
+              >
+                <ChevronDown className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Ver mais títulos (+6)</span>
+              </button>
+            )}
+            {onExploreAll && (
+              <button
+                type="button"
+                onClick={onExploreAll}
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 flex items-center gap-1.5 transition-colors"
+              >
+                <Compass className="w-3.5 h-3.5" />
+                <span>Explorar Catálogo Completo ({animes.length})</span>
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </section>
   );
