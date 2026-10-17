@@ -163,11 +163,11 @@ export const Navbar: React.FC<NavbarProps> = ({
               >
                 {isOnline ? (
                   <>
-                    <Wifi className="w-3 h-3" /> FastAPI Online
+                    <Wifi className="w-3 h-3" /> Sistema Online
                   </>
                 ) : (
                   <>
-                    <WifiOff className="w-3 h-3" /> Fallback Local
+                    <WifiOff className="w-3 h-3" /> Modo Offline
                   </>
                 )}
               </span>

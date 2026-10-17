@@ -35,25 +35,91 @@ export const FALLBACK_ANIME_BANNER =
 </svg>
 `.trim());
 
+const resolvedMediaCache = new Map<number, { cover?: string | null; banner?: string | null }>();
+const pendingMediaRequests = new Map<number, Promise<{ cover?: string | null; banner?: string | null } | null>>();
+
+function isLocalDevServer(): boolean {
+  if (typeof window === 'undefined') return false;
+  const h = window.location.hostname;
+  return h === 'localhost' || h === '127.0.0.1' || h.startsWith('192.168.') || h.startsWith('10.');
+}
+
+async function fetchFreshAniListMedia(
+  animeId: number
+): Promise<{ cover?: string | null; banner?: string | null } | null> {
+  if (resolvedMediaCache.has(animeId)) {
+    return resolvedMediaCache.get(animeId) ?? null;
+  }
+  const existing = pendingMediaRequests.get(animeId);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    try {
+      const res = await fetch('https://graphql.anilist.co', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          query: `query ($id: Int) { Media(id: $id, type: ANIME) { coverImage { extraLarge large } bannerImage } }`,
+          variables: { id: animeId },
+        }),
+      });
+      if (!res.ok) return null;
+      const json = await res.json();
+      const media = json?.data?.Media;
+      if (!media) return null;
+      const entry = {
+        cover: media.coverImage?.extraLarge || media.coverImage?.large || null,
+        banner: media.bannerImage || null,
+      };
+      resolvedMediaCache.set(animeId, entry);
+      return entry;
+    } catch {
+      return null;
+    } finally {
+      pendingMediaRequests.delete(animeId);
+    }
+  })();
+
+  pendingMediaRequests.set(animeId, promise);
+  return promise;
+}
+
 /**
  * Safely handles image load errors:
- * 1. If loading from an external CDN URL fails (e.g. AniList rotated CDN hash),
- *    it attempts to load the persistently cached version from our local backend proxy:
- *    `/api/media/cover/${animeId}` or `/api/media/banner/${animeId}`.
- * 2. If the local proxy also fails or no animeId is present, it gracefully displays
- *    the custom SVG fallback poster/banner.
+ * 1. On local dev server, tries `/api/media/cover/${animeId}` first.
+ * 2. Immediately applies `FALLBACK_ANIME_POSTER` so broken image icons never appear.
+ * 3. Queries AniList GraphQL in the background to self-heal rotated CDN hashes on static hosting.
  */
 export const handleCoverError = (
   e: React.SyntheticEvent<HTMLImageElement, Event>,
   animeId?: number
 ) => {
   const img = e.currentTarget;
+  const failedSrc = img.src;
   const localProxyUrl = animeId ? `/api/media/cover/${animeId}` : null;
 
-  if (localProxyUrl && !img.src.includes(`/api/media/cover/${animeId}`)) {
+  if (
+    isLocalDevServer() &&
+    localProxyUrl &&
+    !failedSrc.includes(`/api/media/cover/${animeId}`) &&
+    !img.dataset.triedLocalProxy
+  ) {
+    img.dataset.triedLocalProxy = '1';
     img.src = localProxyUrl;
-  } else if (img.src !== FALLBACK_ANIME_POSTER) {
+    return;
+  }
+
+  if (img.src !== FALLBACK_ANIME_POSTER) {
     img.src = FALLBACK_ANIME_POSTER;
+  }
+
+  if (animeId && !img.dataset.triedAnilistHeal) {
+    img.dataset.triedAnilistHeal = '1';
+    void fetchFreshAniListMedia(animeId).then((fresh) => {
+      if (fresh?.cover && fresh.cover !== failedSrc) {
+        img.src = fresh.cover;
+      }
+    });
   }
 };
 
@@ -62,11 +128,30 @@ export const handleBannerError = (
   animeId?: number
 ) => {
   const img = e.currentTarget;
+  const failedSrc = img.src;
   const localBannerUrl = animeId ? `/api/media/banner/${animeId}` : null;
 
-  if (localBannerUrl && !img.src.includes(`/api/media/banner/${animeId}`)) {
+  if (
+    isLocalDevServer() &&
+    localBannerUrl &&
+    !failedSrc.includes(`/api/media/banner/${animeId}`) &&
+    !img.dataset.triedLocalProxy
+  ) {
+    img.dataset.triedLocalProxy = '1';
     img.src = localBannerUrl;
-  } else if (img.src !== FALLBACK_ANIME_BANNER) {
+    return;
+  }
+
+  if (img.src !== FALLBACK_ANIME_BANNER) {
     img.src = FALLBACK_ANIME_BANNER;
+  }
+
+  if (animeId && !img.dataset.triedAnilistHeal) {
+    img.dataset.triedAnilistHeal = '1';
+    void fetchFreshAniListMedia(animeId).then((fresh) => {
+      if (fresh?.banner && fresh.banner !== failedSrc) {
+        img.src = fresh.banner;
+      }
+    });
   }
 };
