@@ -8,6 +8,7 @@ import {
   Bookmark,
   EyeOff,
   Ban,
+  X,
 } from 'lucide-react';
 import type { AnimePublic } from '../types';
 import { FALLBACK_ANIME_POSTER, handleCoverError } from '../utils/imageFallback';
@@ -57,10 +58,6 @@ export const AnimeCard: React.FC<AnimeCardProps> = ({
       role="button"
       aria-label={`Ver detalhes de ${displayTitle}`}
       data-testid={`anime-card-${anime.id}`}
-      onMouseEnter={() => setShowRatingBar(true)}
-      onMouseLeave={() => setShowRatingBar(false)}
-      onFocus={() => setShowRatingBar(true)}
-      onBlur={() => setShowRatingBar(false)}
       onClick={() => onSelect?.(anime)}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -202,7 +199,7 @@ export const AnimeCard: React.FC<AnimeCardProps> = ({
           </div>
         </div>
 
-        {/* Quick 1-Click Rating + Skip + Drop Controls */}
+        {/* Touch-Friendly Rating + Skip + Drop Controls */}
         <div
           onClick={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
@@ -218,57 +215,70 @@ export const AnimeCard: React.FC<AnimeCardProps> = ({
               <span className="text-[10px] text-emerald-400/80 font-mono">Em Minha Lista</span>
             </div>
           ) : showRatingBar ? (
-            <div className="space-y-1.5">
+            <div className="p-2 rounded-xl bg-[#11141c] border border-indigo-500/30 space-y-2 animate-in fade-in duration-150">
               <div className="flex items-center justify-between text-[11px] text-slate-300">
-                <span>Avaliar obra:</span>
-                <span className="font-mono font-bold text-indigo-400">{selectedScore}/10</span>
+                <span className="font-medium">Escolha sua nota:</span>
+                <div className="flex items-center gap-1.5">
+                  <span className="font-mono font-bold text-amber-400">{selectedScore}/10</span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowRatingBar(false);
+                    }}
+                    title="Fechar seletor de nota"
+                    className="p-0.5 rounded text-slate-400 hover:text-white hover:bg-white/10"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
-              <div
-                className="flex items-center gap-1"
-                onClick={(e) => e.stopPropagation()}
-                onMouseDown={(e) => e.stopPropagation()}
-                onPointerDown={(e) => e.stopPropagation()}
+
+              <div className="grid grid-cols-5 gap-1">
+                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((score) => (
+                  <button
+                    key={score}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedScore(score);
+                    }}
+                    aria-label={`Selecionar nota ${score} para ${displayTitle}`}
+                    className={`py-1.5 rounded-md text-[11px] font-mono font-bold transition-all ${
+                      selectedScore === score
+                        ? 'bg-amber-500 text-slate-950 shadow scale-105'
+                        : 'bg-[#1f2433] text-slate-300 hover:bg-indigo-600/30 hover:text-white'
+                    }`}
+                  >
+                    {score}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowRatingBar(false);
+                  onRate(anime, selectedScore, trackType);
+                }}
+                className="w-full py-1.5 px-2.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-colors flex items-center justify-center gap-1.5 shadow"
               >
-                <input
-                  type="range"
-                  min={1}
-                  max={10}
-                  step={1}
-                  value={selectedScore}
-                  onClick={(e) => e.stopPropagation()}
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onTouchStart={(e) => e.stopPropagation()}
-                  onChange={(e) => {
-                    e.stopPropagation();
-                    setSelectedScore(Number(e.target.value));
-                  }}
-                  aria-label={`Nota para ${displayTitle}`}
-                  className="w-full accent-indigo-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
-                />
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onRate(anime, selectedScore, trackType);
-                  }}
-                  className="px-2.5 py-1 rounded-md text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-colors shrink-0"
-                >
-                  Confirmar
-                </button>
-              </div>
+                <Star className="w-3.5 h-3.5 fill-amber-300 text-amber-300" />
+                <span>Confirmar Nota ({selectedScore}/10)</span>
+              </button>
             </div>
           ) : (
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                onRate(anime, selectedScore, trackType);
+                setShowRatingBar(true);
               }}
               className="w-full py-1.5 px-3 rounded-lg text-xs font-medium bg-[#1f2433] hover:bg-indigo-600/20 text-slate-200 hover:text-indigo-300 border border-white/5 hover:border-indigo-500/30 transition-all flex items-center justify-center gap-1.5"
             >
               <Star className="w-3.5 h-3.5 text-amber-400" />
-              <span>Marcar como Visto ({selectedScore}/10)</span>
+              <span>Avaliar Obra</span>
             </button>
           )}
 

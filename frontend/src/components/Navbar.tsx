@@ -7,8 +7,6 @@ import {
   User,
   Sparkles,
   RotateCcw,
-  Wifi,
-  WifiOff,
   Cloud,
   LogOut,
 } from 'lucide-react';
@@ -17,7 +15,7 @@ import type { GoogleUserAccount } from '../types';
 interface NavbarProps {
   activeTab: string;
   onSelectTab: (tab: string) => void;
-  isOnline: boolean;
+  isOnline?: boolean;
   totalRatings: number;
   onResetProfile: () => void;
   googleAccount?: GoogleUserAccount | null;
@@ -28,7 +26,6 @@ interface NavbarProps {
 export const Navbar: React.FC<NavbarProps> = ({
   activeTab,
   onSelectTab,
-  isOnline,
   totalRatings,
   onResetProfile,
   googleAccount,
@@ -94,9 +91,18 @@ export const Navbar: React.FC<NavbarProps> = ({
             <div className="p-3 rounded-xl bg-emerald-950/30 border border-emerald-500/30 space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
-                  <div className="w-6 h-6 rounded-full bg-emerald-600 text-white text-xs font-bold flex items-center justify-center shrink-0">
-                    {googleAccount.name.charAt(0).toUpperCase()}
-                  </div>
+                  {googleAccount.picture ? (
+                    <img
+                      src={googleAccount.picture}
+                      alt={googleAccount.name}
+                      referrerPolicy="no-referrer"
+                      className="w-6 h-6 rounded-full object-cover shrink-0 border border-emerald-400/50"
+                    />
+                  ) : (
+                    <div className="w-6 h-6 rounded-full bg-emerald-600 text-white text-xs font-bold flex items-center justify-center shrink-0">
+                      {googleAccount.name.charAt(0).toUpperCase()}
+                    </div>
+                  )}
                   <div className="min-w-0">
                     <span className="text-xs font-semibold text-white block truncate">
                       {googleAccount.name}
@@ -119,7 +125,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               </div>
               <div className="flex items-center gap-1.5 text-[10px] text-emerald-300 font-medium">
                 <Cloud className="w-3 h-3 shrink-0" />
-                <span>Progresso salvo no Google</span>
+                <span>Sincronização automática ativa</span>
               </div>
             </div>
           ) : (
@@ -153,25 +159,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             )
           )}
 
-          <div className="px-3 py-2.5 rounded-lg bg-[#171b26] border border-white/5 text-xs space-y-1.5">
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400">Motor API</span>
-              <span
-                className={`inline-flex items-center gap-1 font-mono font-medium ${
-                  isOnline ? 'text-emerald-400' : 'text-amber-400'
-                }`}
-              >
-                {isOnline ? (
-                  <>
-                    <Wifi className="w-3 h-3" /> Sistema Online
-                  </>
-                ) : (
-                  <>
-                    <WifiOff className="w-3 h-3" /> Modo Offline
-                  </>
-                )}
-              </span>
-            </div>
+          <div className="px-3 py-2.5 rounded-lg bg-[#171b26] border border-white/5 text-xs">
             <div className="flex items-center justify-between text-slate-400">
               <span>Avaliações</span>
               <span className="font-mono font-bold text-slate-200">{totalRatings}</span>

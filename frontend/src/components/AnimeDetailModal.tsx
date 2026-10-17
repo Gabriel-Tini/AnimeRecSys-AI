@@ -426,7 +426,7 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({
 
             {/* Rating Selector */}
             {onRate && (
-              <div className="p-3.5 rounded-xl bg-[#171b26] border border-white/5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="p-3.5 rounded-xl bg-[#171b26] border border-white/5 flex flex-col gap-3">
                 {userRating != null ? (
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 w-full">
                     <div className="flex items-center gap-2.5">
@@ -457,14 +457,19 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({
                     ) : null}
                   </div>
                 ) : (
-                  <>
-                    <div className="flex items-center gap-2">
-                      <Star className="w-4 h-4 text-amber-400" />
-                      <span className="text-xs text-slate-200 font-medium">
-                        Já assistiu? Avalie esta obra:
+                  <div className="w-full space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <Star className="w-4 h-4 text-amber-400 shrink-0" />
+                        <span className="text-xs text-slate-200 font-medium">
+                          Já assistiu? Toque na nota para avaliar:
+                        </span>
+                      </div>
+                      <span className="text-[11px] font-mono text-amber-400 font-semibold">
+                        1 a 10 ★
                       </span>
                     </div>
-                    <div className="flex items-center gap-1 overflow-x-auto pb-1 sm:pb-0">
+                    <div className="grid grid-cols-5 sm:grid-cols-10 gap-1.5 w-full">
                       {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((score) => (
                         <button
                           key={score}
@@ -474,17 +479,17 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({
                             onClose();
                             onRate(anime, score);
                           }}
-                          className={`px-2.5 py-1 rounded-lg text-xs font-mono font-semibold transition-all ${
+                          className={`py-2 px-1 rounded-lg text-xs font-mono font-bold transition-all flex items-center justify-center ${
                             selectedScore === score
                               ? 'bg-amber-500 text-black shadow-md'
-                              : 'bg-white/5 hover:bg-white/10 text-slate-300'
+                              : 'bg-white/5 hover:bg-amber-500/20 hover:text-amber-300 text-slate-200 border border-white/5'
                           }`}
                         >
                           {score}★
                         </button>
                       ))}
                     </div>
-                  </>
+                  </div>
                 )}
               </div>
             )}

@@ -50,11 +50,15 @@ import {
   submitRating,
   submitSemanticTuning,
   syncAniList,
-  syncGoogleProgress,
   toggleFavorite,
   toggleWatchlist,
   updateRecommendationFilters,
 } from './services/api';
+import {
+  signInWithRealGooglePopup,
+  signOutFromRealGoogle,
+  subscribeToGoogleAuthChanges,
+} from './services/firebaseAuth';
 import type {
   AnimePublic,
   RecommendationPayload,
@@ -157,30 +161,8 @@ export const App: React.FC = () => {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [showFilterPanel, setShowFilterPanel] = useState<boolean>(true);
 
-  // Google Sign-In Chooser State
-  const [googleModalOpen, setGoogleModalOpen] = useState(false);
-  const [showManualGoogleInput, setShowManualGoogleInput] = useState(false);
-  const [googleEmailInput, setGoogleEmailInput] = useState('');
-  const [googleNameInput, setGoogleNameInput] = useState('');
+  // Real Google OAuth State
   const [isSyncingGoogle, setIsSyncingGoogle] = useState(false);
-
-  const savedGoogleAccounts = useMemo(() => {
-    try {
-      const stored = localStorage.getItem('saved_google_accounts');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch {
-      // ignore
-    }
-    return [
-      {
-        name: 'Henrique Gabriel',
-        email: 'hgabriel.dev@gmail.com',
-      },
-    ];
-  }, [googleModalOpen]);
 
   // Edit Rating State (Minha Lista)
   const [editingHistoryEntry, setEditingHistoryEntry] = useState<WatchHistoryEntry | null>(null);
@@ -512,28 +494,17 @@ export const App: React.FC = () => {
     showToast('Todos os bloqueios de formato e gênero foram removidos.');
   };
 
-  // Google Login & Sync Handlers
-  const handleGoogleLoginSubmit = async (email: string, name: string) => {
-    if (!email.trim()) return;
+  // Real Google OAuth Popup Login & Automatic Sync Handlers
+  const handleRealGoogleLogin = async () => {
     setIsSyncingGoogle(true);
     try {
-      const cleanEmail = email.trim();
-      const cleanName = name.trim() || cleanEmail.split('@')[0];
+      const googleUser = await signInWithRealGooglePopup();
       const res = await googleSignIn({
-        email: cleanEmail,
-        name: cleanName,
+        sub: googleUser.uid,
+        email: googleUser.email,
+        name: googleUser.displayName,
+        picture: googleUser.photoURL ?? undefined,
       });
-
-      // Save to localStorage for instant 1-click chooser
-      try {
-        const stored = localStorage.getItem('saved_google_accounts');
-        let list: Array<{ email: string; name: string }> = stored ? JSON.parse(stored) : [];
-        list = list.filter((a) => a.email.toLowerCase() !== cleanEmail.toLowerCase());
-        list.unshift({ email: cleanEmail, name: cleanName });
-        localStorage.setItem('saved_google_accounts', JSON.stringify(list.slice(0, 3)));
-      } catch {
-        // ignore
-      }
 
       setProfile(res.new_profile);
       if (res.watch_history) {
@@ -549,26 +520,52 @@ export const App: React.FC = () => {
       if (res.updated_recommendations) {
         setRecommendations(res.updated_recommendations);
       }
-      setGoogleModalOpen(false);
-      setShowManualGoogleInput(false);
-      showToast(res.message || 'Progresso conectado e salvo na sua conta Google!');
+      showToast(
+        `Conta Google (${googleUser.email}) vinculada! Sincronização automática ativada.`
+      );
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code || '';
+      if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+        return;
+      }
+      showToast(
+        'Não foi possível concluir o login com o Google. Verifique se pop-ups estão permitidos no navegador.'
+      );
     } finally {
       setIsSyncingGoogle(false);
     }
   };
 
-  const handleManualGoogleSync = async () => {
-    setIsSyncingGoogle(true);
-    try {
-      const res = await syncGoogleProgress();
-      setProfile(res.new_profile);
-      showToast('Seu progresso foi salvo e sincronizado na sua conta Google!');
-    } finally {
-      setIsSyncingGoogle(false);
-    }
-  };
+  useEffect(() => {
+    const unsubscribe = subscribeToGoogleAuthChanges((googleUser) => {
+      if (!googleUser) return;
+      void googleSignIn({
+        sub: googleUser.uid,
+        email: googleUser.email,
+        name: googleUser.displayName,
+        picture: googleUser.photoURL ?? undefined,
+      }).then((res) => {
+        setProfile(res.new_profile);
+        if (res.watch_history) {
+          setWatchHistory(res.watch_history);
+          const updatedRatings: Record<number, number> = {};
+          for (const item of res.watch_history) {
+            if (item.interaction_status !== 'dropped') {
+              updatedRatings[item.anime_id] = item.rating;
+            }
+          }
+          setRatedMap(updatedRatings);
+        }
+        if (res.updated_recommendations) {
+          setRecommendations(res.updated_recommendations);
+        }
+      });
+    });
+    return () => unsubscribe();
+  }, []);
 
   const handleGoogleSignOut = async () => {
+    await signOutFromRealGoogle();
     const res = await googleLogout();
     setProfile(res.new_profile);
     showToast('Conta Google desconectada. Seu backup permanece salvo.');
@@ -889,7 +886,7 @@ export const App: React.FC = () => {
         totalRatings={profile.total_ratings}
         onResetProfile={handleResetProfile}
         googleAccount={profile.google_account}
-        onOpenGoogleModal={() => setGoogleModalOpen(true)}
+        onOpenGoogleModal={() => void handleRealGoogleLogin()}
         onGoogleLogout={() => void handleGoogleSignOut()}
       />
 
@@ -913,26 +910,25 @@ export const App: React.FC = () => {
               </div>
             )}
 
-            {/* Google Sign-In / Sync Button in Header */}
+            {/* Google Sign-In / Automatic Sync Status in Header */}
             {profile.google_account ? (
-              <button
-                type="button"
-                onClick={() => void handleManualGoogleSync()}
-                disabled={isSyncingGoogle}
-                title="Clique para sincronizar seu progresso na Conta Google"
-                className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-xl bg-emerald-950/40 hover:bg-emerald-900/50 border border-emerald-500/30 text-xs text-emerald-200 transition-colors"
+              <div
+                onClick={() => setActiveTab('profile')}
+                title="Sincronização automática ativa com sua Conta Google"
+                className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-xl bg-emerald-950/40 hover:bg-emerald-900/50 border border-emerald-500/30 text-xs text-emerald-200 transition-colors cursor-pointer"
               >
-                <Cloud className="w-3.5 h-3.5 text-emerald-400" />
+                <Cloud className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                 <span className="hidden sm:inline font-medium">
-                  Salvo: {profile.google_account.name}
+                  Auto-Sync: {profile.google_account.name}
                 </span>
-              </button>
+              </div>
             ) : (
               <button
                 type="button"
-                onClick={() => setGoogleModalOpen(true)}
+                onClick={() => void handleRealGoogleLogin()}
+                disabled={isSyncingGoogle}
                 data-testid="header-google-login-btn"
-                className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-slate-900 text-xs font-semibold shadow transition-colors"
+                className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 disabled:opacity-60 text-slate-900 text-xs font-semibold shadow transition-colors"
               >
                 <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24">
                   <path
@@ -952,7 +948,9 @@ export const App: React.FC = () => {
                     d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
                   />
                 </svg>
-                <span className="hidden sm:inline">Entrar com Google</span>
+                <span className="hidden sm:inline">
+                  {isSyncingGoogle ? 'Conectando...' : 'Entrar com Google'}
+                </span>
               </button>
             )}
 
@@ -974,9 +972,18 @@ export const App: React.FC = () => {
               onClick={() => setActiveTab('profile')}
               className="flex items-center gap-2 pl-2 border-l border-[#232936] cursor-pointer"
             >
-              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-600 to-purple-500 flex items-center justify-center text-xs font-bold text-white shadow">
-                {profile.google_account ? profile.google_account.name.charAt(0).toUpperCase() : 'U'}
-              </div>
+              {profile.google_account?.picture ? (
+                <img
+                  src={profile.google_account.picture}
+                  alt={profile.google_account.name}
+                  referrerPolicy="no-referrer"
+                  className="w-8 h-8 rounded-full object-cover border border-indigo-400/50 shadow"
+                />
+              ) : (
+                <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-600 to-purple-500 flex items-center justify-center text-xs font-bold text-white shadow">
+                  {profile.google_account ? profile.google_account.name.charAt(0).toUpperCase() : 'U'}
+                </div>
+              )}
               <div className="hidden md:block text-xs">
                 <span className="font-semibold text-white block leading-none">
                   {profile.google_account ? profile.google_account.name : 'Meu Perfil'}
@@ -1781,9 +1788,18 @@ export const App: React.FC = () => {
               {/* Google Account Sync Card in Profile */}
               <div className="p-5 rounded-2xl bg-[#11141c] border border-[#232936] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div className="flex items-center gap-3.5">
-                  <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-indigo-600 to-purple-500 flex items-center justify-center text-lg font-bold text-white shadow">
-                    {profile.google_account ? profile.google_account.name.charAt(0).toUpperCase() : 'U'}
-                  </div>
+                  {profile.google_account?.picture ? (
+                    <img
+                      src={profile.google_account.picture}
+                      alt={profile.google_account.name}
+                      referrerPolicy="no-referrer"
+                      className="w-12 h-12 rounded-2xl object-cover border border-indigo-400/50 shadow shrink-0"
+                    />
+                  ) : (
+                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-indigo-600 to-purple-500 flex items-center justify-center text-lg font-bold text-white shadow shrink-0">
+                      {profile.google_account ? profile.google_account.name.charAt(0).toUpperCase() : 'U'}
+                    </div>
+                  )}
                   <div>
                     <h1 className="text-lg font-bold text-white">
                       {profile.google_account
@@ -1792,23 +1808,18 @@ export const App: React.FC = () => {
                     </h1>
                     <p className="text-xs text-slate-400">
                       {profile.google_account
-                        ? `Conectado ao Google (${profile.google_account.email}) • Progresso salvo automaticamente`
-                        : 'Conecte sua conta Google para salvar seu histórico, favoritos, bloqueios e preferências.'}
+                        ? `Conectado ao Google (${profile.google_account.email}) • Sincronização automática em tempo real ativa`
+                        : 'Vincule sua conta Google real para sincronizar seu histórico, notas, favoritos e lista automaticamente.'}
                     </p>
                   </div>
                 </div>
 
                 {profile.google_account ? (
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void handleManualGoogleSync()}
-                      disabled={isSyncingGoogle}
-                      className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white flex items-center gap-1.5 transition-colors"
-                    >
-                      <Cloud className="w-3.5 h-3.5" />
-                      <span>Sincronizar Agora</span>
-                    </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="px-3 py-2 rounded-xl text-xs font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Sincronizado Automaticamente</span>
+                    </span>
                     <button
                       type="button"
                       onClick={() => void handleGoogleSignOut()}
@@ -1820,11 +1831,29 @@ export const App: React.FC = () => {
                 ) : (
                   <button
                     type="button"
-                    onClick={() => setGoogleModalOpen(true)}
-                    className="px-4 py-2.5 rounded-xl text-xs font-semibold bg-white hover:bg-slate-100 text-slate-900 flex items-center gap-2 shadow transition-colors self-start sm:self-auto"
+                    onClick={() => void handleRealGoogleLogin()}
+                    disabled={isSyncingGoogle}
+                    className="px-4 py-2.5 rounded-xl text-xs font-semibold bg-white hover:bg-slate-100 disabled:opacity-60 text-slate-900 flex items-center gap-2 shadow transition-colors self-start sm:self-auto"
                   >
-                    <Cloud className="w-4 h-4 text-indigo-600" />
-                    <span>Fazer Login com o Google</span>
+                    <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                      <path
+                        fill="#4285F4"
+                        d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                      />
+                      <path
+                        fill="#34A853"
+                        d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                      />
+                      <path
+                        fill="#FBBC05"
+                        d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+                      />
+                      <path
+                        fill="#EA4335"
+                        d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+                      />
+                    </svg>
+                    <span>{isSyncingGoogle ? 'Abrindo Google...' : 'Vincular Conta Google'}</span>
                   </button>
                 )}
               </div>
@@ -1898,169 +1927,6 @@ export const App: React.FC = () => {
           )}
         </main>
       </div>
-
-      {/* ==================================================================== */}
-      {/* GOOGLE LOGIN MODAL                                                   */}
-      {/* ==================================================================== */}
-      {/* ==================================================================== */}
-      {/* GOOGLE LOGIN MODAL (ACCOUNT CHOOSER)                                 */}
-      {/* ==================================================================== */}
-      {googleModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-md rounded-2xl bg-[#11141c] border border-[#232936] p-6 space-y-5 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-white/10 pb-3">
-              <div className="flex items-center gap-2.5">
-                <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
-                  <path
-                    fill="#4285F4"
-                    d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                  />
-                  <path
-                    fill="#34A853"
-                    d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                  />
-                  <path
-                    fill="#FBBC05"
-                    d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
-                  />
-                  <path
-                    fill="#EA4335"
-                    d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
-                  />
-                </svg>
-                <div>
-                  <h2 className="text-base font-bold text-white">
-                    Fazer login com o Google
-                  </h2>
-                  <p className="text-[11px] text-slate-400">Escolha uma conta para continuar</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setGoogleModalOpen(false);
-                  setShowManualGoogleInput(false);
-                }}
-                className="p-1 rounded-lg text-slate-400 hover:text-white"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {!showManualGoogleInput ? (
-              <div className="space-y-3">
-                <p className="text-xs text-slate-300">
-                  Clique na sua conta para conectar e salvar suas notas, histórico e lista com 1 clique:
-                </p>
-
-                <div className="space-y-2">
-                  {savedGoogleAccounts.map((acc) => (
-                    <button
-                      key={acc.email}
-                      type="button"
-                      disabled={isSyncingGoogle}
-                      onClick={() => void handleGoogleLoginSubmit(acc.email, acc.name)}
-                      className="w-full flex items-center justify-between p-3.5 rounded-xl bg-[#171b26] hover:bg-[#1f2433] border border-white/10 hover:border-indigo-500/50 transition-all text-left group cursor-pointer"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-indigo-600/30 border border-indigo-500/40 flex items-center justify-center font-bold text-indigo-300 text-sm shrink-0">
-                          {acc.name.charAt(0).toUpperCase()}
-                        </div>
-                        <div>
-                          <div className="text-xs font-semibold text-white group-hover:text-indigo-300 transition-colors">
-                            {acc.name}
-                          </div>
-                          <div className="text-[11px] text-slate-400 font-mono">
-                            {acc.email}
-                          </div>
-                        </div>
-                      </div>
-                      <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                        {isSyncingGoogle ? 'Conectando...' : 'Entrar com 1 clique'}
-                      </span>
-                    </button>
-                  ))}
-
-                  <button
-                    type="button"
-                    onClick={() => setShowManualGoogleInput(true)}
-                    className="w-full flex items-center gap-3 p-3 rounded-xl bg-[#0e1017] hover:bg-[#151821] border border-dashed border-white/10 hover:border-white/20 transition-all text-left text-xs text-slate-400 hover:text-white cursor-pointer"
-                  >
-                    <div className="w-8 h-8 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-slate-400">
-                      +
-                    </div>
-                    <span>Usar outra conta Google</span>
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void handleGoogleLoginSubmit(googleEmailInput, googleNameInput);
-                }}
-                className="space-y-3.5"
-              >
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">
-                    E-mail do Google (Gmail)
-                  </label>
-                  <input
-                    type="email"
-                    required
-                    value={googleEmailInput}
-                    onChange={(e) => setGoogleEmailInput(e.target.value)}
-                    placeholder="seu.email@gmail.com"
-                    className="w-full px-3.5 py-2 rounded-xl bg-[#0a0c10] border border-white/10 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">
-                    Nome de Exibição
-                  </label>
-                  <input
-                    type="text"
-                    value={googleNameInput}
-                    onChange={(e) => setGoogleNameInput(e.target.value)}
-                    placeholder="Ex.: Henrique"
-                    className="w-full px-3.5 py-2 rounded-xl bg-[#0a0c10] border border-white/10 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                  />
-                </div>
-
-                <div className="flex items-center justify-between pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowManualGoogleInput(false)}
-                    className="text-xs text-slate-400 hover:text-white"
-                  >
-                    ← Voltar às contas
-                  </button>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setGoogleModalOpen(false);
-                        setShowManualGoogleInput(false);
-                      }}
-                      className="px-3.5 py-2 rounded-xl text-xs font-medium bg-[#171b26] text-slate-300 hover:text-white"
-                    >
-                      Cancelar
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={isSyncingGoogle || !googleEmailInput.trim()}
-                      className="px-4 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white shadow transition-colors"
-                    >
-                      {isSyncingGoogle ? 'Conectando...' : 'Entrar'}
-                    </button>
-                  </div>
-                </div>
-              </form>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* ==================================================================== */}
       {/* ANILIST INTEGRATION MODAL                                            */}

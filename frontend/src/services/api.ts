@@ -638,6 +638,14 @@ export async function submitRating(payload: RatingSubmission): Promise<RateRespo
     }),
   });
   if (data && data.new_profile) {
+    fallbackProfile = data.new_profile;
+    if (data.history_entry) {
+      fallbackHistory = [
+        ...fallbackHistory.filter((h) => h.anime_id !== data.history_entry!.anime_id),
+        data.history_entry,
+      ];
+    }
+    void autoSyncGoogleIfConnected();
     if (data.updated_recommendations) {
       data.updated_recommendations = {
         ...data.updated_recommendations,
@@ -742,6 +750,13 @@ export async function editRating(payload: EditRatingSubmission): Promise<RateRes
     }),
   });
   if (data && data.new_profile) {
+    fallbackProfile = data.new_profile;
+    if (data.history_entry) {
+      fallbackHistory = fallbackHistory.map((h) =>
+        h.anime_id === payload.anime_id ? data.history_entry! : h
+      );
+    }
+    void autoSyncGoogleIfConnected();
     if (data.updated_recommendations) {
       data.updated_recommendations = {
         ...data.updated_recommendations,
@@ -802,6 +817,8 @@ export async function submitSemanticTuning(payload: TuneSubmission): Promise<Tun
     }),
   });
   if (data && data.new_profile) {
+    fallbackProfile = data.new_profile;
+    void autoSyncGoogleIfConnected();
     return data;
   }
 
@@ -873,6 +890,8 @@ export async function skipAnime(animeId: number, unskip = false): Promise<SkipRe
     body: JSON.stringify({ anime_id: animeId, unskip }),
   });
   if (data && data.new_profile) {
+    fallbackProfile = data.new_profile;
+    void autoSyncGoogleIfConnected();
     if (data.updated_recommendations) {
       data.updated_recommendations = {
         ...data.updated_recommendations,
@@ -921,6 +940,8 @@ export async function dropAnime(payload: DropSubmission): Promise<DropResponse> 
     }),
   });
   if (data && data.new_profile) {
+    fallbackProfile = data.new_profile;
+    void autoSyncGoogleIfConnected();
     if (data.updated_recommendations) {
       data.updated_recommendations = {
         ...data.updated_recommendations,
@@ -1000,6 +1021,8 @@ export async function toggleFavorite(animeId: number): Promise<ToggleListRespons
     body: JSON.stringify({ anime_id: animeId }),
   });
   if (data && data.new_profile) {
+    fallbackProfile = data.new_profile;
+    void autoSyncGoogleIfConnected();
     return data;
   }
 
@@ -1035,6 +1058,8 @@ export async function toggleWatchlist(animeId: number): Promise<ToggleListRespon
     body: JSON.stringify({ anime_id: animeId }),
   });
   if (data && data.new_profile) {
+    fallbackProfile = data.new_profile;
+    void autoSyncGoogleIfConnected();
     return data;
   }
 
@@ -1109,6 +1134,8 @@ export async function updateRecommendationFilters(
     body: JSON.stringify(payload),
   });
   if (data && data.new_profile) {
+    fallbackProfile = data.new_profile;
+    void autoSyncGoogleIfConnected();
     if (data.updated_recommendations) {
       data.updated_recommendations = {
         ...data.updated_recommendations,
@@ -1146,6 +1173,11 @@ export async function googleSignIn(payload: GoogleAuthPayload): Promise<GoogleAu
     body: JSON.stringify(payload),
   });
   if (data && data.new_profile) {
+    fallbackProfile = data.new_profile;
+    if (Array.isArray(data.watch_history)) {
+      fallbackHistory = data.watch_history;
+    }
+    persistLocalState();
     if (data.updated_recommendations) {
       data.updated_recommendations = {
         ...data.updated_recommendations,
@@ -1200,6 +1232,23 @@ export async function googleSignIn(payload: GoogleAuthPayload): Promise<GoogleAu
 }
 
 /**
+ * Automatically synchronizes user progress with the linked Google account in the background.
+ */
+async function autoSyncGoogleIfConnected(): Promise<void> {
+  try {
+    persistLocalState();
+    if (isBackendOnlineCache && fallbackProfile.google_account) {
+      await fetchBackendJson<GoogleAuthResponse>(`${API_BASE_URL}/auth/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+  } catch {
+    // Ignore background auto-sync errors
+  }
+}
+
+/**
  * Explicitly synchronizes current user progress to the linked Google account backup.
  */
 export async function syncGoogleProgress(): Promise<GoogleAuthResponse> {
@@ -1208,6 +1257,8 @@ export async function syncGoogleProgress(): Promise<GoogleAuthResponse> {
     headers: { 'Content-Type': 'application/json' },
   });
   if (data && data.new_profile) {
+    fallbackProfile = data.new_profile;
+    persistLocalState();
     return data;
   }
 
